@@ -203,6 +203,9 @@ pub struct ProveNextLayerParams {
     pub table_packing: TablePacking,
     /// Constraint profile controlling which AIR variants are used for this layer.
     pub constraint_profile: ConstraintProfile,
+    /// Number of leading Public-table values to surface as STARK `public_values`
+    /// on the verify-enforced channel. `0` preserves upstream behaviour.
+    pub num_exposed_public_values: usize,
 }
 
 impl Default for ProveNextLayerParams {
@@ -210,6 +213,7 @@ impl Default for ProveNextLayerParams {
         Self {
             table_packing: TablePacking::new(1, 4),
             constraint_profile: ConstraintProfile::Standard,
+            num_exposed_public_values: 0,
         }
     }
 }
@@ -351,7 +355,8 @@ where
         .with_alu_variant(match params.constraint_profile {
             ConstraintProfile::Standard => AirVariant::Baseline,
             ConstraintProfile::RecursionOptimized => AirVariant::Optimized,
-        });
+        })
+        .with_exposed_public_values(params.num_exposed_public_values);
     for p in backend.non_primitive_provers(D) {
         prover.register_table_prover(p);
     }
@@ -458,7 +463,8 @@ where
         .with_alu_variant(match params.constraint_profile {
             ConstraintProfile::Standard => AirVariant::Baseline,
             ConstraintProfile::RecursionOptimized => AirVariant::Optimized,
-        });
+        })
+        .with_exposed_public_values(params.num_exposed_public_values);
     for p in backend.non_primitive_provers(D) {
         prover.register_table_prover(p);
     }
@@ -703,7 +709,8 @@ where
         .with_alu_variant(match params.constraint_profile {
             ConstraintProfile::Standard => AirVariant::Baseline,
             ConstraintProfile::RecursionOptimized => AirVariant::Optimized,
-        });
+        })
+        .with_exposed_public_values(params.num_exposed_public_values);
     for p in <B as PcsRecursionBackend<SC, A1, D>>::non_primitive_provers(backend, D) {
         prover.register_table_prover(p);
     }

@@ -341,6 +341,9 @@ where
     non_primitive_provers: Vec<Box<dyn TableProver<SC>>>,
     /// When true, run the lookup debugger before proving to report imbalanced multisets.
     debug_lookups: bool,
+    /// Number of leading Public-table values surfaced as STARK `public_values`
+    /// on the verify-enforced channel. `0` preserves upstream behaviour.
+    num_exposed_public_values: usize,
 }
 
 /// Errors for the batch STARK table prover.
@@ -374,6 +377,17 @@ where
             Self::Public(a) => a.width(),
             Self::Alu(a) => a.width(),
             Self::Dynamic(a) => <dyn CloneableBatchAir<SC> as BaseAir<Val<SC>>>::width(a.air()),
+        }
+    }
+
+    fn num_public_values(&self) -> usize {
+        match self {
+            Self::Const(a) => a.num_public_values(),
+            Self::Public(a) => a.num_public_values(),
+            Self::Alu(a) => a.num_public_values(),
+            Self::Dynamic(a) => {
+                <dyn CloneableBatchAir<SC> as BaseAir<Val<SC>>>::num_public_values(a.air())
+            }
         }
     }
 
@@ -539,7 +553,17 @@ where
             alu_variant: AirVariant::Optimized,
             non_primitive_provers: Vec::new(),
             debug_lookups: false,
+            num_exposed_public_values: 0,
         }
+    }
+
+    /// Surface the first `n` Public-table values as STARK `public_values` on the
+    /// verify-enforced channel. Must match between the proving and verifying
+    /// prover instances. `0` (default) preserves upstream behaviour.
+    #[must_use]
+    pub const fn with_exposed_public_values(mut self, n: usize) -> Self {
+        self.num_exposed_public_values = n;
+        self
     }
 
     /// Override the default [`TablePacking`] configuration (builder-style).
@@ -646,14 +670,30 @@ where
         proof: &BatchStarkProof<SC>,
         circuit_common: &CommonData<SC>,
     ) -> Result<(), BatchStarkProverError> {
+        self.verify_all_tables_with_public_values(proof, circuit_common, &[])
+    }
+
+    /// Verify the unified batch STARK proof, supplying the EXPECTED leading
+    /// Public-table values. These are routed to the Public table's
+    /// `public_values` slot so `verify_batch` enforces them: if they differ
+    /// from the values the prover committed, Fiat-Shamir challenge derivation
+    /// desynchronises and verification fails. `expected_public_values.len()`
+    /// must equal the prover's `num_exposed_public_values` (and hence the
+    /// rebuilt `PublicAir::num_public_values()`).
+    pub fn verify_all_tables_with_public_values(
+        &self,
+        proof: &BatchStarkProof<SC>,
+        circuit_common: &CommonData<SC>,
+        expected_public_values: &[Val<SC>],
+    ) -> Result<(), BatchStarkProverError> {
         let common = proof.stark_common.as_ref().unwrap_or(circuit_common);
         match proof.ext_degree {
-            1 => self.verify::<1>(proof, None, common),
-            2 => self.verify::<2>(proof, proof.w_binomial, common),
-            4 => self.verify::<4>(proof, proof.w_binomial, common),
-            5 => self.verify::<5>(proof, proof.w_binomial, common),
-            6 => self.verify::<6>(proof, proof.w_binomial, common),
-            8 => self.verify::<8>(proof, proof.w_binomial, common),
+            1 => self.verify::<1>(proof, None, common, expected_public_values),
+            2 => self.verify::<2>(proof, proof.w_binomial, common, expected_public_values),
+            4 => self.verify::<4>(proof, proof.w_binomial, common, expected_public_values),
+            5 => self.verify::<5>(proof, proof.w_binomial, common, expected_public_values),
+            6 => self.verify::<6>(proof, proof.w_binomial, common, expected_public_values),
+            8 => self.verify::<8>(proof, proof.w_binomial, common, expected_public_values),
             d => Err(BatchStarkProverError::UnsupportedDegree(d)),
         }
     }
@@ -734,7 +774,8 @@ where
         let public_prep = primitive[PrimitiveOpType::Public as usize].clone();
         let public_air =
             PublicAir::<Val<SC>, D>::new_with_preprocessed(public_rows, public_lanes, public_prep)
-                .with_min_height(min_height);
+                .with_min_height(min_height)
+                .with_exposed_public_values(self.num_exposed_public_values);
         let public_matrix: RowMajorMatrix<Val<SC>> = PublicAir::<Val<SC>, D>::trace_to_matrix(
             &traces.public_trace,
             public_lanes,
@@ -918,7 +959,19 @@ where
 
         air_storage.push(CircuitTableAir::Public(public_air));
         trace_storage.push(public_matrix);
-        public_storage.push(Vec::new());
+        // Surface the first `num_exposed_public_values` public inputs (base-field
+        // coordinate 0 of each entry; base values are lifted as [v,0,..,0]) as the
+        // Public table's STARK `public_values`. `verify_batch` observes these into
+        // the Fiat-Shamir transcript, so a verifier that supplies a different
+        // expected value desynchronises challenge derivation and rejects.
+        let exposed_public_values: Vec<Val<SC>> = traces
+            .public_trace
+            .values
+            .iter()
+            .take(self.num_exposed_public_values)
+            .map(|v| v.as_basis_coefficients_slice()[0])
+            .collect();
+        public_storage.push(exposed_public_values);
 
         air_storage.push(CircuitTableAir::Alu(alu_air));
         trace_storage.push(alu_matrix);
@@ -1066,6 +1119,7 @@ where
         proof: &BatchStarkProof<SC>,
         w_binomial: Option<Val<SC>>,
         common: &CommonData<SC>,
+        expected_public_values: &[Val<SC>],
     ) -> Result<(), BatchStarkProverError> {
         let prover_index_by_type: BTreeMap<NpoTypeId, usize> = self
             .non_primitive_provers
@@ -1086,7 +1140,8 @@ where
         );
         let public_air = CircuitTableAir::Public(
             PublicAir::<Val<SC>, D>::new(proof.rows[PrimitiveTable::Public], public_lanes)
-                .with_min_height(min_height),
+                .with_min_height(min_height)
+                .with_exposed_public_values(self.num_exposed_public_values),
         );
         let horner_k = packing.horner_packed_steps();
         let alu_air: CircuitTableAir<SC, D> = if D == 1 {
@@ -1116,6 +1171,10 @@ where
         let mut pvs: Vec<Vec<Val<SC>>> =
             Vec::with_capacity(NUM_PRIMITIVE_TABLES + proof.non_primitives.len());
         pvs.resize_with(NUM_PRIMITIVE_TABLES, Vec::new);
+        // Route caller-supplied EXPECTED public values to the Public table's
+        // slot so `verify_batch` enforces them (Const/Alu stay empty). Length
+        // must match the rebuilt `PublicAir::num_public_values()`.
+        pvs[PrimitiveTable::Public as usize] = expected_public_values.to_vec();
 
         for entry in &proof.non_primitives {
             let pi = *prover_index_by_type.get(&entry.op_type).ok_or_else(|| {

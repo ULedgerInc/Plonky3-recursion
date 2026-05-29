@@ -50,6 +50,10 @@ pub struct PublicAir<F, const D: usize = 1> {
     pub num_lookup_columns: usize,
     /// Minimum trace height (for FRI compatibility with higher log_final_poly_len).
     pub min_height: usize,
+    /// Number of leading public-input values surfaced as this table's STARK
+    /// `public_values` (the verify-enforced `verify_batch` channel). `0`
+    /// preserves upstream behaviour (no public values on the Public table).
+    pub num_exposed_public_values: usize,
     _phantom: PhantomData<F>,
 }
 
@@ -68,6 +72,7 @@ impl<F: Field, const D: usize> PublicAir<F, D> {
             preprocessed: Vec::new(),
             num_lookup_columns: 0,
             min_height: 1,
+            num_exposed_public_values: 0,
             _phantom: PhantomData,
         }
     }
@@ -87,8 +92,20 @@ impl<F: Field, const D: usize> PublicAir<F, D> {
             preprocessed,
             num_lookup_columns: 0,
             min_height: 1,
+            num_exposed_public_values: 0,
             _phantom: PhantomData,
         }
+    }
+
+    /// Surface the first `n` public-input values as this table's STARK
+    /// `public_values`, so a verifier can supply expected values that
+    /// `verify_batch` enforces (Fiat-Shamir transcript binding) and that are
+    /// extractable from the decoded proof. `n` must match between prove and
+    /// verify (the AIR is rebuilt at verify).
+    #[must_use]
+    pub const fn with_exposed_public_values(mut self, n: usize) -> Self {
+        self.num_exposed_public_values = n;
+        self
     }
 
     /// Set the minimum trace height for FRI compatibility.
@@ -173,6 +190,10 @@ impl<F: Field, const D: usize> PublicAir<F, D> {
 impl<F: Field, const D: usize> BaseAir<F> for PublicAir<F, D> {
     fn width(&self) -> usize {
         self.total_width()
+    }
+
+    fn num_public_values(&self) -> usize {
+        self.num_exposed_public_values
     }
 
     fn preprocessed_trace(&self) -> Option<RowMajorMatrix<F>> {
