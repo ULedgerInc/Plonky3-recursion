@@ -749,6 +749,7 @@ fn get_verifier_inputs_and_challenges(
             tp.extend(recompose_table_provers::<_, 4>(1, false));
             tp
         },
+        &[],
     )
     .map(|(inputs, _mmcs_op_ids)| inputs);
 

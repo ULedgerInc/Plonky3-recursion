@@ -187,6 +187,7 @@ fn test_fibonacci_batch_verifier() {
             tp.extend(recompose_table_provers::<_, 4>(1, false));
             tp
         },
+        &[],
     )
     .unwrap();
 

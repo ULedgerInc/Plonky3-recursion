@@ -223,6 +223,13 @@ pub fn verify_p3_batch_proof_circuit<
     lookup_gadget: &LG,
     challenger_perm_config: CP,
     non_primitive_provers: &[Box<dyn TableProver<SC>>],
+    // Per-table public-input counts to expose in-circuit (indexed like the
+    // batch instances: `[Const, Public, Alu, ..non-primitives..]`). Only the
+    // primitive `Public` slot is honoured here; an empty slice means "expose
+    // nothing" (upstream-compatible default). Must agree with the values the
+    // caller later packs via `pack_public_values` and with the count the
+    // prover committed (`num_exposed_public_values`).
+    table_public_inputs: &[Vec<Val<SC>>],
 ) -> Result<
     (
         BatchStarkVerifierInputsBuilder<SC, Comm, OpeningProof>,
@@ -265,14 +272,22 @@ where
         }
     };
 
+    // Number of leading Public-table values surfaced on the verify-enforced
+    // channel for this instance. Derived from the supplied per-table public
+    // inputs so the rebuilt AIR's `num_public_values()`, the allocated public
+    // targets, and the packed values all agree.
+    let public_count = table_public_inputs
+        .get(PrimitiveTable::Public as usize)
+        .map_or(0, Vec::len);
+
     let mut circuit_airs: Vec<CircuitTablesAir<SC, TRACE_D>> = vec![
         CircuitTablesAir::Const(ConstAir::<Val<SC>, TRACE_D>::new(
             rows[PrimitiveTable::Const],
         )),
-        CircuitTablesAir::Public(PublicAir::<Val<SC>, TRACE_D>::new(
-            rows[PrimitiveTable::Public],
-            public_lanes,
-        )),
+        CircuitTablesAir::Public(
+            PublicAir::<Val<SC>, TRACE_D>::new(rows[PrimitiveTable::Public], public_lanes)
+                .with_exposed_public_values(public_count),
+        ),
         CircuitTablesAir::Alu(alu_air),
     ];
 
@@ -293,6 +308,7 @@ where
     }
 
     let mut air_public_counts = vec![0usize; NUM_PRIMITIVE_TABLES];
+    air_public_counts[PrimitiveTable::Public as usize] = public_count;
     for entry in &proof.non_primitives {
         air_public_counts.push(entry.public_values.len());
     }

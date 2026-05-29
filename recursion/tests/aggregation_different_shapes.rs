@@ -178,6 +178,7 @@ fn test_aggregation_with_different_shapes() -> Result<(), VerificationError> {
         &lookup_gadget,
         Poseidon2Config::KoalaBearD4Width16,
         &batch_poseidon_provers,
+        &[],
     )?;
 
     // Build the verification circuit.

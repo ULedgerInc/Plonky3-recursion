@@ -11,7 +11,7 @@ use p3_batch_stark::{CommonData, ProverData};
 use p3_circuit::symbolic::ColumnsTargets;
 use p3_circuit::tables::Traces;
 use p3_circuit::{Circuit, CircuitBuilder, CircuitRunner, NonPrimitiveOpId};
-use p3_circuit_prover::batch_stark_prover::TableProver;
+use p3_circuit_prover::batch_stark_prover::{PrimitiveTable, TableProver};
 use p3_circuit_prover::common::{NpoAirBuilder, NpoPreprocessor, get_airs_and_degrees_with_prep};
 use p3_circuit_prover::config::StarkField;
 use p3_circuit_prover::field_params::ExtractBinomialW;
@@ -110,6 +110,38 @@ where
             proof: &self.0,
             common_data,
             table_public_inputs: vec![vec![]; num_tables],
+        }
+    }
+
+    /// Like [`RecursionOutput::into_recursion_input`], but surfaces `leading`
+    /// as the previous head's `Public`-table public inputs. Use this when the
+    /// previous head was proved with `num_exposed_public_values = leading.len()`
+    /// (the verify-enforced public-values carry): the aggregation circuit then
+    /// allocates and feeds those Public-table values so its in-circuit
+    /// re-verification of the previous head observes the same public values the
+    /// prover committed (otherwise the transcript desynchronises). `leading`
+    /// must equal the previous head's leading exposed values.
+    pub fn into_recursion_input_with_public_inputs<A>(
+        &self,
+        leading: &[Val<SC>],
+    ) -> RecursionInput<'_, SC, A>
+    where
+        A: RecursiveAir<Val<SC>, SC::Challenge, LogUpGadget>,
+    {
+        let num_tables = self.0.proof.opened_values.instances.len();
+        let common_data = self
+            .0
+            .stark_common
+            .as_ref()
+            .unwrap_or_else(|| self.1.common_data());
+        let mut table_public_inputs = vec![Vec::new(); num_tables];
+        if let Some(slot) = table_public_inputs.get_mut(PrimitiveTable::Public as usize) {
+            *slot = leading.to_vec();
+        }
+        RecursionInput::BatchStark {
+            proof: &self.0,
+            common_data,
+            table_public_inputs,
         }
     }
 }

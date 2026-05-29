@@ -190,6 +190,7 @@ fn test_fibonacci_batch_verifier_quintic_koala() {
             tp.extend(recompose_table_provers::<MyConfig, 5>(1, true));
             tp
         },
+        &[],
     )
     .unwrap();
 

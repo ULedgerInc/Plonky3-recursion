@@ -330,7 +330,7 @@ where
         RecursionInput::BatchStark {
             proof,
             common_data,
-            table_public_inputs: _,
+            table_public_inputs,
         } => {
             let lookup_gadget = LogUpGadget::new();
             let (verifier_inputs, op_ids) = match proof.ext_degree {
@@ -353,6 +353,7 @@ where
                     &lookup_gadget,
                     backend.challenger_perm_config,
                     non_primitive_provers,
+                    table_public_inputs,
                 )?,
                 2 => verify_p3_batch_proof_circuit::<
                     SC,
@@ -373,6 +374,7 @@ where
                     &lookup_gadget,
                     backend.challenger_perm_config,
                     non_primitive_provers,
+                    table_public_inputs,
                 )?,
                 4 => verify_p3_batch_proof_circuit::<
                     SC,
@@ -393,6 +395,7 @@ where
                     &lookup_gadget,
                     backend.challenger_perm_config,
                     non_primitive_provers,
+                    table_public_inputs,
                 )?,
                 5 => verify_p3_batch_proof_circuit::<
                     SC,
@@ -413,6 +416,7 @@ where
                     &lookup_gadget,
                     backend.challenger_perm_config,
                     non_primitive_provers,
+                    table_public_inputs,
                 )?,
                 d => {
                     return Err(VerificationError::InvalidProofShape(format!(
