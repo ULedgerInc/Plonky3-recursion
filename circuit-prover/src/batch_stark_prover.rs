@@ -1217,7 +1217,26 @@ where
         Algebra<SymbolicExpression<Val<SC>>> + Algebra<SC::Challenge>,
     Poseidon2AirBuilder<D>: NpoAirBuilder<SC, D>,
 {
-    vec![Box::new(Poseidon2AirBuilder)]
+    vec![Box::new(Poseidon2AirBuilder::<D>::any())]
+}
+
+/// Poseidon2 AIR builder that matches only `config`'s op type.
+///
+/// Use one per poseidon2 table when several coexist in a single circuit (e.g. the
+/// D=4 FRI perm and the D=1 genesis-boundary perm) so the AIR/preprocessed instances
+/// line up with the prover's table-prover order. The catch-all [`poseidon2_air_builders`]
+/// only emits a single instance and is correct only for single-table circuits.
+pub fn poseidon2_air_builder_for_config<SC, const D: usize>(
+    config: Poseidon2Config,
+) -> Box<dyn NpoAirBuilder<SC, D>>
+where
+    SC: StarkGenericConfig + 'static + Send + Sync,
+    Val<SC>: BinomiallyExtendable<D> + StarkField,
+    SymbolicExpressionExt<Val<SC>, SC::Challenge>:
+        Algebra<SymbolicExpression<Val<SC>>> + Algebra<SC::Challenge>,
+    Poseidon2AirBuilder<D>: NpoAirBuilder<SC, D>,
+{
+    Box::new(Poseidon2AirBuilder::<D>::for_config(config))
 }
 
 /// Create Poseidon2 table provers for D=4 (e.g. BabyBear, KoalaBear).
@@ -1256,7 +1275,7 @@ where
     SymbolicExpressionExt<Val<SC>, SC::Challenge>:
         Algebra<SymbolicExpression<Val<SC>>> + Algebra<SC::Challenge>,
 {
-    vec![Box::new(Poseidon2AirBuilder::<2>)]
+    vec![Box::new(Poseidon2AirBuilder::<2>::any())]
 }
 
 /// Poseidon2 AIR builders for D=4 (e.g. BabyBear, KoalaBear).
@@ -1267,7 +1286,7 @@ where
     SymbolicExpressionExt<Val<SC>, SC::Challenge>:
         Algebra<SymbolicExpression<Val<SC>>> + Algebra<SC::Challenge>,
 {
-    vec![Box::new(Poseidon2AirBuilder::<4>)]
+    vec![Box::new(Poseidon2AirBuilder::<4>::any())]
 }
 
 /// Poseidon2 AIR builders for `D = 5` circuit traces (e.g. KoalaBear quintic).
@@ -1278,7 +1297,7 @@ where
     SymbolicExpressionExt<Val<SC>, SC::Challenge>:
         Algebra<SymbolicExpression<Val<SC>>> + Algebra<SC::Challenge>,
 {
-    vec![Box::new(Poseidon2AirBuilder::<5>)]
+    vec![Box::new(Poseidon2AirBuilder::<5>::any())]
 }
 
 /// Returns a type-erased Recompose preprocessor.

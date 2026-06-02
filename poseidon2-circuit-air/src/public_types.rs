@@ -75,6 +75,17 @@ impl BabyBearD1Width16 {
         )
         .with_min_height(min_height)
     }
+
+    pub fn default_air_with_preprocessed_witness_bus4(
+        preprocessed: Vec<BabyBear>,
+        min_height: usize,
+    ) -> Poseidon2CircuitAirBabyBearD1Width16WitnessBus4 {
+        Poseidon2CircuitAirBabyBearD1Width16WitnessBus4::new_with_preprocessed(
+            Self::round_constants(),
+            preprocessed,
+        )
+        .with_min_height(min_height)
+    }
 }
 
 /// Configuration for BabyBear with a quartic extension and a 16-element
@@ -326,6 +337,22 @@ pub type Poseidon2CircuitAirBabyBearD1Width16WitnessBus5 = Poseidon2CircuitAir<
     { BabyBearD1Width16::HALF_FULL_ROUNDS },
     { BabyBearD1Width16::PARTIAL_ROUNDS },
     5,
+>;
+
+/// [`BabyBearD1Width16`] with witness-bus keys padded to quartic width (for EF4 + base Poseidon).
+pub type Poseidon2CircuitAirBabyBearD1Width16WitnessBus4 = Poseidon2CircuitAir<
+    BabyBear,
+    GenericPoseidon2LinearLayersBabyBear,
+    { BabyBearD1Width16::D },
+    { BabyBearD1Width16::WIDTH },
+    { BabyBearD1Width16::WIDTH_EXT },
+    { BabyBearD1Width16::RATE_EXT },
+    { BabyBearD1Width16::CAPACITY_EXT },
+    { BabyBearD1Width16::SBOX_DEGREE },
+    { BabyBearD1Width16::SBOX_REGISTERS },
+    { BabyBearD1Width16::HALF_FULL_ROUNDS },
+    { BabyBearD1Width16::PARTIAL_ROUNDS },
+    4,
 >;
 
 /// BabyBear Poseidon2 circuit AIR with quartic extension and 16-element state.

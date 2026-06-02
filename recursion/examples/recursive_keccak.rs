@@ -329,6 +329,7 @@ macro_rules! define_field_module_keccak_quintic {
                     let params = ProveNextLayerParams {
                         table_packing: layer_table_packing,
                         constraint_profile: ConstraintProfile::Standard,
+                        num_exposed_public_values: 0,
                     };
                     let config =
                         config_with_fri_params(fri_params, security_level, disable_recompose_npo);
@@ -339,6 +340,7 @@ macro_rules! define_field_module_keccak_quintic {
                             air: &keccak_air,
                             public_inputs: pis.clone(),
                             preprocessed_commit: None,
+                            genesis_boundary: None,
                         };
                         build_and_prove_next_layer::<ConfigWithFriParams, _, _, D>(
                             &input,
@@ -519,6 +521,7 @@ macro_rules! define_field_module {
                     let params = ProveNextLayerParams {
                         table_packing: layer_table_packing,
                         constraint_profile: ConstraintProfile::Standard,
+                        num_exposed_public_values: 0,
                     };
                     let config =
                         config_with_fri_params(fri_params, security_level, disable_recompose_npo);
@@ -529,6 +532,7 @@ macro_rules! define_field_module {
                             air: &keccak_air,
                             public_inputs: pis.clone(),
                             preprocessed_commit: None,
+                            genesis_boundary: None,
                         };
                         build_and_prove_next_layer::<ConfigWithFriParams, _, _, D>(
                             &input,

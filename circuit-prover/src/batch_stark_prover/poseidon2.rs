@@ -53,6 +53,7 @@ use crate::constraint_profile::ConstraintProfile;
 const fn poseidon_d1_witness_bus_dim(witness_ctl_scale: u32) -> Option<u32> {
     match witness_ctl_scale {
         1 => Some(1),
+        4 => Some(4),
         5 => Some(5),
         _ => None,
     }
@@ -60,6 +61,7 @@ const fn poseidon_d1_witness_bus_dim(witness_ctl_scale: u32) -> Option<u32> {
 
 pub enum Poseidon2AirWrapperInner {
     BabyBearD1Width16Bus1(Box<Poseidon2CircuitAirBabyBearD1Width16>),
+    BabyBearD1Width16Bus4(Box<Poseidon2CircuitAirBabyBearD1Width16WitnessBus4>),
     BabyBearD1Width16Bus5(Box<Poseidon2CircuitAirBabyBearD1Width16WitnessBus5>),
     BabyBearD4Width16(Box<Poseidon2CircuitAirBabyBearD4Width16>),
     BabyBearD4Width24(Box<Poseidon2CircuitAirBabyBearD4Width24>),
@@ -74,6 +76,7 @@ impl Poseidon2AirWrapperInner {
     pub fn width(&self) -> usize {
         match self {
             Self::BabyBearD1Width16Bus1(air) => air.width(),
+            Self::BabyBearD1Width16Bus4(air) => air.width(),
             Self::BabyBearD1Width16Bus5(air) => air.width(),
             Self::BabyBearD4Width16(air) => air.width(),
             Self::BabyBearD4Width24(air) => air.width(),
@@ -90,6 +93,7 @@ impl Clone for Poseidon2AirWrapperInner {
     fn clone(&self) -> Self {
         match self {
             Self::BabyBearD1Width16Bus1(air) => Self::BabyBearD1Width16Bus1(air.clone()),
+            Self::BabyBearD1Width16Bus4(air) => Self::BabyBearD1Width16Bus4(air.clone()),
             Self::BabyBearD1Width16Bus5(air) => Self::BabyBearD1Width16Bus5(air.clone()),
             Self::BabyBearD4Width16(air) => Self::BabyBearD4Width16(air.clone()),
             Self::BabyBearD4Width24(air) => Self::BabyBearD4Width24(air.clone()),
@@ -158,6 +162,15 @@ macro_rules! eval_folder_inner {
                 let p: &[<$bb_ty as AirBuilder>::Var] = transmute($prep);
                 call_eval_variant!(BabyBearD1Width16, BabyBearConfig, BabyBear,
                     GenericPoseidon2LinearLayersBabyBear, $bb_ty, 1;
+                    air.as_ref(), b, l, n, p);
+            },
+            Poseidon2AirWrapperInner::BabyBearD1Width16Bus4(air) => unsafe {
+                let b: &mut $bb_ty = transmute::<_, &mut $bb_ty>($builder);
+                let l: &[<$bb_ty as AirBuilder>::Var] = transmute($local);
+                let n: &[<$bb_ty as AirBuilder>::Var] = transmute($next);
+                let p: &[<$bb_ty as AirBuilder>::Var] = transmute($prep);
+                call_eval_variant!(BabyBearD1Width16, BabyBearConfig, BabyBear,
+                    GenericPoseidon2LinearLayersBabyBear, $bb_ty, 4;
                     air.as_ref(), b, l, n, p);
             },
             Poseidon2AirWrapperInner::BabyBearD1Width16Bus5(air) => unsafe {
@@ -247,6 +260,9 @@ macro_rules! add_lookup_columns_inner {
             Poseidon2AirWrapperInner::BabyBearD1Width16Bus1(air) => {
                 LookupAir::add_lookup_columns(air.as_mut())
             }
+            Poseidon2AirWrapperInner::BabyBearD1Width16Bus4(air) => {
+                LookupAir::add_lookup_columns(air.as_mut())
+            }
             Poseidon2AirWrapperInner::BabyBearD1Width16Bus5(air) => {
                 LookupAir::add_lookup_columns(air.as_mut())
             }
@@ -284,6 +300,11 @@ macro_rules! get_lookups_inner {
                 core::mem::transmute(lookups)
             },
             Poseidon2AirWrapperInner::BabyBearD1Width16Bus1(air) => unsafe {
+                assert_eq!(<$F>::from_u64(BABY_BEAR_MODULUS), <$F>::ZERO);
+                let lookups = LookupAir::get_lookups(air.as_mut());
+                core::mem::transmute(lookups)
+            },
+            Poseidon2AirWrapperInner::BabyBearD1Width16Bus4(air) => unsafe {
                 assert_eq!(<$F>::from_u64(BABY_BEAR_MODULUS), <$F>::ZERO);
                 let lookups = LookupAir::get_lookups(air.as_mut());
                 core::mem::transmute(lookups)
@@ -331,6 +352,13 @@ macro_rules! eval_symbolic_inner {
     ($inner:expr, $builder:expr, $F:ty) => {
         match $inner {
             Poseidon2AirWrapperInner::BabyBearD1Width16Bus1(air) => {
+                assert_eq!(<$F>::from_u64(BABY_BEAR_MODULUS), <$F>::ZERO);
+                unsafe {
+                    let b: &mut SymbolicAirBuilder<BabyBear> = core::mem::transmute($builder);
+                    Air::eval(air.as_ref(), b);
+                }
+            }
+            Poseidon2AirWrapperInner::BabyBearD1Width16Bus4(air) => {
                 assert_eq!(<$F>::from_u64(BABY_BEAR_MODULUS), <$F>::ZERO);
                 unsafe {
                     let b: &mut SymbolicAirBuilder<BabyBear> = core::mem::transmute($builder);
@@ -403,6 +431,11 @@ macro_rules! eval_verifier_inner {
                     GenericPoseidon2LinearLayersBabyBear, $ab, 1;
                     air.as_ref(), $builder, $local, $next, $prep);
             },
+            Poseidon2AirWrapperInner::BabyBearD1Width16Bus4(air) => unsafe {
+                call_eval_variant!(BabyBearD1Width16, BabyBearConfig, BabyBear,
+                    GenericPoseidon2LinearLayersBabyBear, $ab, 4;
+                    air.as_ref(), $builder, $local, $next, $prep);
+            },
             Poseidon2AirWrapperInner::BabyBearD1Width16Bus5(air) => unsafe {
                 call_eval_variant!(BabyBearD1Width16, BabyBearConfig, BabyBear,
                     GenericPoseidon2LinearLayersBabyBear, $ab, 5;
@@ -456,6 +489,11 @@ macro_rules! preprocessed_trace_inner {
     ($inner:expr, $SC:ty) => {
         match $inner {
             Poseidon2AirWrapperInner::BabyBearD1Width16Bus1(air) => {
+                assert_eq!(Val::<$SC>::from_u64(BABY_BEAR_MODULUS), Val::<$SC>::ZERO);
+                let p = BaseAir::<BabyBear>::preprocessed_trace(air.as_ref())?;
+                Some(unsafe { transmute::<RowMajorMatrix<BabyBear>, RowMajorMatrix<Val<$SC>>>(p) })
+            }
+            Poseidon2AirWrapperInner::BabyBearD1Width16Bus4(air) => {
                 assert_eq!(Val::<$SC>::from_u64(BABY_BEAR_MODULUS), Val::<$SC>::ZERO);
                 let p = BaseAir::<BabyBear>::preprocessed_trace(air.as_ref())?;
                 Some(unsafe { transmute::<RowMajorMatrix<BabyBear>, RowMajorMatrix<Val<$SC>>>(p) })
@@ -550,6 +588,7 @@ impl<F: Field> BaseAir<F> for Poseidon2AirWrapperInner {
     fn width(&self) -> usize {
         match self {
             Self::BabyBearD1Width16Bus1(a) => BaseAir::<BabyBear>::width(a.as_ref()),
+            Self::BabyBearD1Width16Bus4(a) => BaseAir::<BabyBear>::width(a.as_ref()),
             Self::BabyBearD1Width16Bus5(a) => BaseAir::<BabyBear>::width(a.as_ref()),
             Self::BabyBearD4Width16(a) => BaseAir::<BabyBear>::width(a.as_ref()),
             Self::BabyBearD4Width24(a) => BaseAir::<BabyBear>::width(a.as_ref()),
@@ -864,6 +903,11 @@ impl Poseidon2Prover {
                     1 => Poseidon2AirWrapperInner::BabyBearD1Width16Bus1(Box::new(
                         BabyBearD1Width16::default_air_with_preprocessed(prep, min_height),
                     )),
+                    4 => Poseidon2AirWrapperInner::BabyBearD1Width16Bus4(Box::new(
+                        BabyBearD1Width16::default_air_with_preprocessed_witness_bus4(
+                            prep, min_height,
+                        ),
+                    )),
                     5 => Poseidon2AirWrapperInner::BabyBearD1Width16Bus5(Box::new(
                         BabyBearD1Width16::default_air_with_preprocessed_witness_bus5(
                             prep, min_height,
@@ -1070,6 +1114,19 @@ impl Poseidon2Prover {
                         let matrix_f = air.generate_trace_rows(&ops, &constants, 0);
                         (
                             Poseidon2AirWrapperInner::BabyBearD1Width16Bus1(Box::new(air)),
+                            matrix_f,
+                        )
+                    }
+                    4 => {
+                        let air = BabyBearD1Width16::default_air_with_preprocessed_witness_bus4(
+                            preprocessed,
+                            min_height,
+                        );
+                        let ops: Vec<Poseidon2CircuitRow<BabyBear>> =
+                            unsafe { transmute(padded_ops) };
+                        let matrix_f = air.generate_trace_rows(&ops, &constants, 0);
+                        (
+                            Poseidon2AirWrapperInner::BabyBearD1Width16Bus4(Box::new(air)),
                             matrix_f,
                         )
                     }
@@ -1728,6 +1785,7 @@ pub(crate) fn poseidon2_air_try_build<SC, const D: usize>(
     prep_base: &[Val<SC>],
     min_height: usize,
     constraint_profile: ConstraintProfile,
+    filter: Option<Poseidon2Config>,
 ) -> Option<(CircuitTableAir<SC, D>, usize)>
 where
     SC: StarkGenericConfig + 'static + Send + Sync,
@@ -1738,6 +1796,9 @@ where
     let suffix = op_type.as_str().strip_prefix("poseidon2_perm/")?;
     let config = Poseidon2Config::from_variant_name(suffix)?;
     let config = poseidon2_config_for_air_builder::<D>(config)?;
+    if filter.is_some_and(|want| want != config) {
+        return None;
+    }
     let prover = Poseidon2Prover::new(config, constraint_profile);
     let wrapper =
         prover.wrapper_from_config_with_preprocessed(prep_base.to_vec(), min_height, D as u32)?;
@@ -1753,7 +1814,27 @@ where
 
 /// Poseidon2 NPO AIR builder parameterized by extension degree `D`.
 #[derive(Clone, Default)]
-pub struct Poseidon2AirBuilder<const D: usize>;
+pub struct Poseidon2AirBuilder<const D: usize> {
+    /// When `Some`, this builder matches only the named config's op type, so several
+    /// coexisting poseidon2 tables (e.g. the D=4 FRI perm + the D=1 genesis-boundary
+    /// perm) each get exactly one AIR/preprocessed instance, in registration order.
+    /// `None` matches any poseidon2 op type (single-table behavior).
+    config: Option<Poseidon2Config>,
+}
+
+impl<const D: usize> Poseidon2AirBuilder<D> {
+    /// Builder that matches any poseidon2 op type.
+    pub fn any() -> Self {
+        Self { config: None }
+    }
+
+    /// Builder that matches only `config`'s op type.
+    pub fn for_config(config: Poseidon2Config) -> Self {
+        Self {
+            config: Some(config),
+        }
+    }
+}
 
 impl<SC> NpoAirBuilder<SC, 2> for Poseidon2AirBuilder<2>
 where
@@ -1770,7 +1851,7 @@ where
         _lanes: usize,
         constraint_profile: ConstraintProfile,
     ) -> Option<(CircuitTableAir<SC, 2>, usize)> {
-        poseidon2_air_try_build::<SC, 2>(op_type, prep_base, min_height, constraint_profile)
+        poseidon2_air_try_build::<SC, 2>(op_type, prep_base, min_height, constraint_profile, self.config)
     }
 }
 
@@ -1789,7 +1870,7 @@ where
         _lanes: usize,
         constraint_profile: ConstraintProfile,
     ) -> Option<(CircuitTableAir<SC, 4>, usize)> {
-        poseidon2_air_try_build::<SC, 4>(op_type, prep_base, min_height, constraint_profile)
+        poseidon2_air_try_build::<SC, 4>(op_type, prep_base, min_height, constraint_profile, self.config)
     }
 }
 
@@ -1816,6 +1897,9 @@ where
             Poseidon2Config::BabyBearD1Width16 | Poseidon2Config::KoalaBearD1Width16 => config,
             _ => return None,
         };
+        if self.config.is_some_and(|want| want != config) {
+            return None;
+        }
         let prover = Poseidon2Prover::new(config, constraint_profile);
         let wrapper =
             prover.wrapper_from_config_with_preprocessed(prep_base.to_vec(), min_height, 5)?;

@@ -8,6 +8,7 @@ pub mod backend;
 pub mod challenger;
 pub mod challenger_perm;
 pub mod generation;
+pub mod genesis_boundary;
 pub mod pcs;
 pub mod prelude;
 pub mod public_inputs;

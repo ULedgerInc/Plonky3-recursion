@@ -75,6 +75,12 @@ where
         air: &'a A,
         public_inputs: Vec<Val<SC>>,
         preprocessed_commit: Option<<SC::Pcs as Pcs<SC::Challenge, SC::Challenger>>::Commitment>,
+        /// ULedger genesis boundary (Plan C): `Some(params_digest_limbs)` on the
+        /// genesis wrap only, which constrains the exposed `genesis_id`
+        /// (leading-8) equal to the in-circuit `block_commitment(genesis)`.
+        /// `None` on every non-genesis wrap (`fold_next`), leaving the wrap
+        /// unconstrained as before. See [`crate::genesis_boundary`].
+        genesis_boundary: Option<Vec<Val<SC>>>,
     },
     /// A batch STARK proof (e.g. from p3-batch-stark / circuit-prover) plus common data and per-table public inputs.
     BatchStark {

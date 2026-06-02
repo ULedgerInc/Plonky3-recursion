@@ -7,8 +7,9 @@ use alloc::{format, vec};
 
 use p3_circuit::{CircuitBuilder, CircuitRunner, NonPrimitiveOpId};
 use p3_circuit_prover::batch_stark_prover::{
-    poseidon2_air_builders, poseidon2_air_builders_d5, poseidon2_preprocessor,
-    poseidon2_table_provers_d5, recompose_air_builders, recompose_preprocessor,
+    poseidon2_air_builder_for_config, poseidon2_air_builders, poseidon2_air_builders_d5,
+    poseidon2_preprocessor, poseidon2_table_provers_d5, recompose_air_builders,
+    recompose_preprocessor,
 };
 use p3_circuit_prover::common::{NpoAirBuilder, NpoPreprocessor};
 use p3_circuit_prover::config::StarkField;
@@ -298,6 +299,7 @@ where
             air,
             public_inputs,
             preprocessed_commit,
+            genesis_boundary,
         } => {
             let verifier_inputs =
                 StarkVerifierInputsBuilder::<SC, SC::Commitment, SC::OpeningProof>::allocate(
@@ -325,6 +327,18 @@ where
                 config.pcs_verifier_params(),
                 backend.challenger_perm_config,
             )?;
+            // ULedger Plan C: on the genesis wrap, bind genesis_id to
+            // block_commitment(genesis) in-circuit. Genesis-only, so fold
+            // shapes are unaffected; the genesis wrap becomes its own shape.
+            if let Some(params) = genesis_boundary {
+                let params_ef: Vec<SC::Challenge> =
+                    params.iter().map(|&v| SC::Challenge::from(v)).collect();
+                crate::genesis_boundary::apply_genesis_boundary(
+                    circuit,
+                    &verifier_inputs.air_public_targets,
+                    &params_ef,
+                )?;
+            }
             Ok(FriVerifierResult::UniStark(verifier_inputs, op_ids))
         }
         RecursionInput::BatchStark {
@@ -606,6 +620,16 @@ where
                 self.0.challenger_perm_config,
                 ConstraintProfile::Standard,
             ))];
+            // ULedger Plan C: the genesis boundary hashes base-field values with
+            // a D=1 base Poseidon2 sponge, a distinct op type from the D=4 FRI
+            // perm, so register its table prover too. Harmless on non-genesis
+            // proofs (no D=1 op rows => the table is absent).
+            if self.0.challenger_perm_config != Poseidon2Config::BabyBearD1Width16 {
+                provers.push(Box::new(Poseidon2Prover::new(
+                    Poseidon2Config::BabyBearD1Width16,
+                    ConstraintProfile::Standard,
+                )));
+            }
             provers.extend(recompose_table_provers::<SC, 4>(self.0.recompose_lanes, cl));
             provers
         } else {
@@ -615,7 +639,20 @@ where
 
     fn non_primitive_air_builders(&self) -> Vec<Box<dyn NpoAirBuilder<SC, 4>>> {
         let cl = self.0.challenger_perm_config.d() != 4;
-        let mut builders = poseidon2_air_builders::<SC, 4>();
+        // Symmetric with non_primitive_provers: one config-specific AIR builder per
+        // poseidon2 table, in the same order, so the AIR/preprocessed instances line up
+        // by registration order when the D=1 genesis-boundary perm coexists with the
+        // D=4 FRI perm. A single catch-all builder would emit only one instance (the
+        // common.rs build loop breaks after the first match) => instance misalignment.
+        let mut builders: Vec<Box<dyn NpoAirBuilder<SC, 4>>> =
+            vec![poseidon2_air_builder_for_config::<SC, 4>(
+                self.0.challenger_perm_config,
+            )];
+        if self.0.challenger_perm_config != Poseidon2Config::BabyBearD1Width16 {
+            builders.push(poseidon2_air_builder_for_config::<SC, 4>(
+                Poseidon2Config::BabyBearD1Width16,
+            ));
+        }
         builders.extend(recompose_air_builders::<SC, 4>(self.0.recompose_lanes, cl));
         builders
     }

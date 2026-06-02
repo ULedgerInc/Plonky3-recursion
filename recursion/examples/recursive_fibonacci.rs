@@ -356,6 +356,7 @@ macro_rules! define_field_module {
                                     fri_params.log_blowup,
                                 ),
                                 constraint_profile: ConstraintProfile::Standard,
+                                num_exposed_public_values: 0,
                             };
                             let seed = stable_seed.unwrap_or(layer as u64);
                             let config: $cfg_type = $config_recursive(seed);
@@ -591,6 +592,7 @@ macro_rules! define_field_module_quintic {
                             .clone()
                             .with_fri_params(fri_params.log_final_poly_len, fri_params.log_blowup),
                         constraint_profile: ConstraintProfile::Standard,
+                        num_exposed_public_values: 0,
                     };
                     let seed = stable_seed.unwrap_or(layer as u64);
                     let config: ConfigWithFriParams =
