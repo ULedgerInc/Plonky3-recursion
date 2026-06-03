@@ -9,7 +9,7 @@ use p3_circuit::{CircuitBuilder, CircuitRunner, NonPrimitiveOpId};
 use p3_circuit_prover::batch_stark_prover::{
     poseidon2_air_builder_for_config, poseidon2_air_builders, poseidon2_air_builders_d5,
     poseidon2_preprocessor, poseidon2_table_provers_d5, recompose_air_builders,
-    recompose_preprocessor,
+    recompose_preprocessor, PrimitiveTable,
 };
 use p3_circuit_prover::common::{NpoAirBuilder, NpoPreprocessor};
 use p3_circuit_prover::config::StarkField;
@@ -262,6 +262,21 @@ where
     fn op_ids(&self) -> &[NonPrimitiveOpId] {
         match self {
             Self::UniStark(_, ids) | Self::BatchStark(_, ids) => ids,
+        }
+    }
+
+    fn public_table_targets(&self) -> Vec<crate::Target> {
+        match self {
+            // UniStark (base block): the flat air-public targets; [0..8] is
+            // genesis_id, [8] is block_height under the Plan D layout.
+            Self::UniStark(builder, _) => builder.air_public_targets.clone(),
+            // BatchStark (recursive head): the Public-table instance's targets,
+            // i.e. the leading exposed values threaded from the prior head.
+            Self::BatchStark(builder, _) => builder
+                .air_public_targets
+                .get(PrimitiveTable::Public as usize)
+                .cloned()
+                .unwrap_or_default(),
         }
     }
 }

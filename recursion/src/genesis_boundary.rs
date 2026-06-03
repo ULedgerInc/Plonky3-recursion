@@ -31,21 +31,27 @@ pub const META_TAG: u32 = 0x50_33_00_30;
 /// `DomainTag::Block` discriminant (`plonky3_core::commitment::DomainTag`).
 pub const BLOCK_TAG: u32 = 0x50_33_00_40;
 
-// AIR public-value layout (mirrors `plonky3_core::air`, post Plan C 14->30 growth).
+// AIR public-value layout (mirrors `plonky3_core::air`, post Plan D relayout:
+// block_height moved into the exposed window immediately after genesis_id).
 /// First limb of the exposed `genesis_id` (leading-8) slot.
 pub const PI_XRC: usize = 0;
+/// `block_height` scalar, exposed immediately after `genesis_id`.
+pub const PI_BLOCK_HEIGHT: usize = 8;
 /// First limb of `tx_root`.
-pub const PI_TX_ROOT: usize = 8;
+pub const PI_TX_ROOT: usize = 9;
 /// First limb of `xm_root`.
-pub const PI_XM_ROOT: usize = 16;
-/// `block_height` scalar.
-pub const PI_BLOCK_HEIGHT: usize = 24;
+pub const PI_XM_ROOT: usize = 17;
 /// `previous_block_height` scalar.
 pub const PI_PREV_HEIGHT: usize = 25;
 /// `transaction_count` scalar.
 pub const PI_TX_COUNT: usize = 26;
 /// `cross_reference_count` scalar.
 pub const PI_XM_COUNT: usize = 27;
+
+/// Absolute genesis block height pinned in-circuit (Plan D). Mirrors
+/// `plonky3_core::commitment::GENESIS_HEIGHT_CONST`; a node-side drift guard
+/// (`genesis_boundary_parity`) asserts the two agree.
+pub const GENESIS_HEIGHT: u64 = 1;
 
 /// In-circuit `PaddingFreeSponge<_, 16, 8, 8>` over D=1 base-field inputs,
 /// mirroring [`p3_symmetric::PaddingFreeSponge::hash_iter`] (overwrite mode).
@@ -219,5 +225,16 @@ pub fn apply_genesis_boundary<F: Field>(
         let diff = builder.sub(block[i], air_public_targets[PI_XRC + i]);
         builder.assert_zero(diff);
     }
+
+    // Plan D: pin the absolute genesis height so the exposed lineage counter is
+    // absolute, not relative to a prover-chosen genesis height. Only
+    // `block_height` is pinned; the base AIR already enforces
+    // `block_height == previous_block_height + 1` on the first row, so this
+    // transitively forces `previous_block_height == 0` (a separate prev-height
+    // pin is redundant and trips PublicInputNotSet). sub+assert_zero, not
+    // connect, to stay consistent with the Public-table CTL handling above.
+    let genesis_h = builder.define_const(F::from_u64(GENESIS_HEIGHT));
+    let dh = builder.sub(air_public_targets[PI_BLOCK_HEIGHT], genesis_h);
+    builder.assert_zero(dh);
     Ok(())
 }

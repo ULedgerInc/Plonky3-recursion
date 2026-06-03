@@ -20,7 +20,7 @@ use p3_circuit_prover::{
     TablePacking,
 };
 use p3_commit::Pcs;
-use p3_field::{Algebra, BasedVectorSpace, ExtensionField, Field, PrimeField64};
+use p3_field::{Algebra, BasedVectorSpace, ExtensionField, Field, PrimeCharacteristicRing, PrimeField64};
 use p3_lookup::logup::LogUpGadget;
 use p3_lookup::lookup_traits::{Lookup, LookupData, LookupGadget};
 use p3_uni_stark::{Proof, StarkGenericConfig, Val};
@@ -178,6 +178,13 @@ where
 
     /// Operation IDs that require private data (e.g. Merkle paths) for the circuit runner.
     fn op_ids(&self) -> &[NonPrimitiveOpId];
+
+    /// The verifier result's Public-table public-input targets, in allocation
+    /// order. The leading exposed values of an aggregated head are the FIRST
+    /// child's Public-table targets (ULedger Plan D builds the right/newest
+    /// child first); the aggregation reads BOTH children's targets to enforce
+    /// `genesis_id` continuity and the `block_height` `+1` linkage in-circuit.
+    fn public_table_targets(&self) -> Vec<Target>;
 }
 
 /// PCS-specific backend for building verifier circuits and setting private data.
@@ -585,10 +592,33 @@ where
     <B as PcsRecursionBackend<SC, A1, D>>::prepare_circuit(backend, config, &mut circuit_builder)?;
     <B as PcsRecursionBackend<SC, A2, D>>::prepare_circuit(backend, config, &mut circuit_builder)?;
 
-    // Build left verifier constraints.
-    let left_result = backend.build_verifier_circuit(left, config, &mut circuit_builder)?;
-    // Build right verifier constraints into the same builder.
+    // ULedger Plan D: build the RIGHT (newest) child FIRST so its Op::Public
+    // ops are emitted first; the aggregated head then re-exposes the RIGHT
+    // child's leading [genesis_id(8), block_height(1)], surfacing the NEWEST
+    // height. `run_aggregation_verification_circuit` packs `right ++ left` to
+    // keep the public/private input vectors aligned with this allocation order.
     let right_result = backend.build_verifier_circuit(right, config, &mut circuit_builder)?;
+    let left_result = backend.build_verifier_circuit(left, config, &mut circuit_builder)?;
+
+    // ULedger Plan D: enforce identity continuity + height lineage across the
+    // two folded children on EVERY aggregation (not flag-gated). genesis_id
+    // (leading 8) equal; right.block_height == left.block_height + 1. Read both
+    // children's Public-table targets and emit sub+assert_zero (safe vs the
+    // Public-table CTL).
+    {
+        const GENESIS_ID_LEN: usize = 8;
+        const PI_BLOCK_HEIGHT: usize = 8;
+        let left_pis = VerifierCircuitResult::<SC, A1>::public_table_targets(&left_result);
+        let right_pis = VerifierCircuitResult::<SC, A2>::public_table_targets(&right_result);
+        for i in 0..GENESIS_ID_LEN {
+            let diff = circuit_builder.sub(left_pis[i], right_pis[i]);
+            circuit_builder.assert_zero(diff);
+        }
+        let one = circuit_builder.define_const(SC::Challenge::ONE);
+        let left_plus_one = circuit_builder.add(left_pis[PI_BLOCK_HEIGHT], one);
+        let diff = circuit_builder.sub(right_pis[PI_BLOCK_HEIGHT], left_plus_one);
+        circuit_builder.assert_zero(diff);
+    }
 
     let verification_circuit = circuit_builder
         .build()
@@ -613,11 +643,13 @@ where
     B: PcsRecursionBackend<SC, A1, D> + PcsRecursionBackend<SC, A2, D>,
     Val<SC>: PrimeField64,
 {
-    let mut public_inputs = left_result.pack_public_inputs(left)?;
-    public_inputs.extend(right_result.pack_public_inputs(right)?);
+    // Plan D: pack `right ++ left` to match the right-first allocation order in
+    // `build_aggregation_layer_circuit`.
+    let mut public_inputs = right_result.pack_public_inputs(right)?;
+    public_inputs.extend(left_result.pack_public_inputs(left)?);
 
-    let mut private_inputs = left_result.pack_private_inputs(left)?;
-    private_inputs.extend(right_result.pack_private_inputs(right)?);
+    let mut private_inputs = right_result.pack_private_inputs(right)?;
+    private_inputs.extend(left_result.pack_private_inputs(left)?);
 
     let mut runner = verification_circuit.runner();
     runner
@@ -627,21 +659,21 @@ where
         .set_private_inputs(&private_inputs)
         .map_err(VerificationError::Circuit)?;
 
-    <B as PcsRecursionBackend<SC, A1, D>>::set_private_data(
-        backend,
-        config,
-        &mut runner,
-        left_result.op_ids(),
-        left,
-    )
-    .map_err(|e| proof_shape_err(&e.to_string()))?;
-
     <B as PcsRecursionBackend<SC, A2, D>>::set_private_data(
         backend,
         config,
         &mut runner,
         right_result.op_ids(),
         right,
+    )
+    .map_err(|e| proof_shape_err(&e.to_string()))?;
+
+    <B as PcsRecursionBackend<SC, A1, D>>::set_private_data(
+        backend,
+        config,
+        &mut runner,
+        left_result.op_ids(),
+        left,
     )
     .map_err(|e| proof_shape_err(&e.to_string()))?;
 
