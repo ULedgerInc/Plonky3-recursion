@@ -31,22 +31,25 @@ pub const META_TAG: u32 = 0x50_33_00_30;
 /// `DomainTag::Block` discriminant (`plonky3_core::commitment::DomainTag`).
 pub const BLOCK_TAG: u32 = 0x50_33_00_40;
 
-// AIR public-value layout (mirrors `plonky3_core::air`, post Plan D relayout:
-// block_height moved into the exposed window immediately after genesis_id).
+// AIR public-value layout (mirrors `plonky3_core::air`, post Plan E relayout:
+// the per-block XRC content digest rides the exposed window after the height,
+// shifting everything behind it by DIGEST_LEN).
 /// First limb of the exposed `genesis_id` (leading-8) slot.
 pub const PI_XRC: usize = 0;
 /// `block_height` scalar, exposed immediately after `genesis_id`.
 pub const PI_BLOCK_HEIGHT: usize = 8;
+/// First limb of the exposed per-block `XRC` content digest (Plan E).
+pub const PI_XRC_DIGEST: usize = 9;
 /// First limb of `tx_root`.
-pub const PI_TX_ROOT: usize = 9;
+pub const PI_TX_ROOT: usize = 17;
 /// First limb of `xm_root`.
-pub const PI_XM_ROOT: usize = 17;
+pub const PI_XM_ROOT: usize = 25;
 /// `previous_block_height` scalar.
-pub const PI_PREV_HEIGHT: usize = 25;
+pub const PI_PREV_HEIGHT: usize = 33;
 /// `transaction_count` scalar.
-pub const PI_TX_COUNT: usize = 26;
+pub const PI_TX_COUNT: usize = 34;
 /// `cross_reference_count` scalar.
-pub const PI_XM_COUNT: usize = 27;
+pub const PI_XM_COUNT: usize = 35;
 
 /// Absolute genesis block height pinned in-circuit (Plan D). Mirrors
 /// `plonky3_core::commitment::GENESIS_HEIGHT_CONST`; a node-side drift guard
@@ -172,7 +175,7 @@ pub fn in_circuit_block_commitment<F: Field>(
 /// `prev_proof` are EMPTY constants).
 ///
 /// `params` are the `params_digest()` limbs already embedded into the circuit
-/// field. `air_public_targets` must follow the Plan C 30-wide layout.
+/// field. `air_public_targets` must follow the Plan E 38-wide layout.
 pub fn apply_genesis_boundary<F: Field>(
     builder: &mut CircuitBuilder<F>,
     air_public_targets: &[ExprId],
@@ -180,7 +183,7 @@ pub fn apply_genesis_boundary<F: Field>(
 ) -> Result<(), CircuitBuilderError> {
     assert!(
         air_public_targets.len() >= PI_XM_COUNT + 1,
-        "genesis boundary needs the 30-wide public-value layout"
+        "genesis boundary needs the 38-wide public-value layout"
     );
     assert_eq!(params.len(), DIGEST_LEN, "params digest must be 8 limbs");
 
