@@ -608,6 +608,20 @@ where
     <B as PcsRecursionBackend<SC, A1, D>>::prepare_circuit(backend, config, &mut circuit_builder)?;
     <B as PcsRecursionBackend<SC, A2, D>>::prepare_circuit(backend, config, &mut circuit_builder)?;
 
+    // ULedger anchor: allocate the 8 leading root-of-roots public inputs FIRST so
+    // they occupy the exposed leading slots (pos 0..8), ahead of the children's.
+    // The prover supplies them (root values) and they are constrained below to the
+    // derived root. `run_aggregation_verification_circuit` prepends the same 8
+    // values to keep the public-input vector aligned with this allocation order.
+    const ANCHOR_ROOT_LEN: usize = 8;
+    let anchor_root_pi: Vec<_> = if mode == AggregationMode::Anchor {
+        (0..ANCHOR_ROOT_LEN)
+            .map(|_| circuit_builder.public_input())
+            .collect()
+    } else {
+        Vec::new()
+    };
+
     // ULedger Plan D: build the RIGHT (newest) child FIRST so its Op::Public
     // ops are emitted first; the aggregated head then re-exposes the RIGHT
     // child's leading [genesis_id(8), block_height(1)], surfacing the NEWEST
@@ -634,6 +648,16 @@ where
         let left_plus_one = circuit_builder.add(left_pis[PI_BLOCK_HEIGHT], one);
         let diff = circuit_builder.sub(right_pis[PI_BLOCK_HEIGHT], left_plus_one);
         circuit_builder.assert_zero(diff);
+    } else {
+        // Anchor: constrain the exposed leading root public inputs to the derived
+        // root-of-roots. Tracer (4a): the derivation is the LEFT accumulator's
+        // leading root copied through; the Poseidon2 absorb of the right member's
+        // genesis_id replaces it next. sub+assert_zero is CTL-safe vs Public.
+        let left_pis = VerifierCircuitResult::<SC, A1>::public_table_targets(&left_result);
+        for i in 0..ANCHOR_ROOT_LEN {
+            let diff = circuit_builder.sub(anchor_root_pi[i], left_pis[i]);
+            circuit_builder.assert_zero(diff);
+        }
     }
 
     let verification_circuit = circuit_builder
@@ -651,6 +675,7 @@ fn run_aggregation_verification_circuit<SC, A1, A2, B, const D: usize>(
     verification_circuit: &Circuit<SC::Challenge>,
     config: &SC,
     backend: &B,
+    mode: AggregationMode,
 ) -> Result<Traces<SC::Challenge>, VerificationError>
 where
     SC: StarkGenericConfig,
@@ -658,10 +683,30 @@ where
     A2: RecursiveAir<Val<SC>, SC::Challenge, LogUpGadget>,
     B: PcsRecursionBackend<SC, A1, D> + PcsRecursionBackend<SC, A2, D>,
     Val<SC>: PrimeField64,
+    SC::Challenge: From<Val<SC>>,
 {
     // Plan D: pack `right ++ left` to match the right-first allocation order in
-    // `build_aggregation_layer_circuit`.
-    let mut public_inputs = right_result.pack_public_inputs(right)?;
+    // `build_aggregation_layer_circuit`. In Anchor mode the 8 leading root
+    // values (allocated first in the circuit) are prepended to stay aligned.
+    let mut public_inputs = Vec::new();
+    if mode == AggregationMode::Anchor {
+        // Tracer (4a): the root values the anchor exposes are the LEFT
+        // accumulator's leading root, prepended ahead of the children's.
+        if let RecursionInput::BatchStark {
+            table_public_inputs,
+            ..
+        } = left
+        {
+            let left_leading = table_public_inputs
+                .get(PrimitiveTable::Public as usize)
+                .cloned()
+                .unwrap_or_default();
+            for v in left_leading.iter().take(8) {
+                public_inputs.push(SC::Challenge::from(*v));
+            }
+        }
+    }
+    public_inputs.extend(right_result.pack_public_inputs(right)?);
     public_inputs.extend(left_result.pack_public_inputs(left)?);
 
     let mut private_inputs = right_result.pack_private_inputs(right)?;
@@ -746,6 +791,7 @@ where
             verification_circuit,
             config,
             backend,
+            params.aggregation_mode,
         )?;
         let proof = cached
             .prover
@@ -783,6 +829,7 @@ where
         verification_circuit,
         config,
         backend,
+        params.aggregation_mode,
     )?;
 
     let circuit_prover_data = {
