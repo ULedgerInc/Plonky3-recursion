@@ -883,7 +883,7 @@ where
 ///
 /// ```ignore
 /// let (verification_circuit, (left_result, right_result)) = build_aggregation_layer_circuit::<SC, A1, A2, B, D>(left, right, config, backend)?;
-/// let out = prove_aggregation_layer::<SC, A1, A2, B, D>(..., params, None);
+/// let out = prove_aggregation_layer::<SC, A1, A2, B, D>(..., params, &[], None);
 /// ```
 pub fn build_and_prove_aggregation_layer<SC, A1, A2, B, const D: usize>(
     left: &RecursionInput<'_, SC, A1>,
