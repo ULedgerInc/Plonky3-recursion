@@ -254,6 +254,9 @@ pub enum AggregationMode {
     Anchor,
 }
 
+/// Limbs of the root-of-roots an anchor layer exposes (Poseidon2 digest length).
+pub const ANCHOR_ROOT_LEN: usize = 8;
+
 /// Parameters for the shared recursion pipeline (table packing, optional overrides).
 #[derive(Clone, Debug)]
 pub struct ProveNextLayerParams {
@@ -613,7 +616,6 @@ where
     // The prover supplies them (root values) and they are constrained below to the
     // derived root. `run_aggregation_verification_circuit` prepends the same 8
     // values to keep the public-input vector aligned with this allocation order.
-    const ANCHOR_ROOT_LEN: usize = 8;
     let anchor_root_pi: Vec<_> = if mode == AggregationMode::Anchor {
         (0..ANCHOR_ROOT_LEN)
             .map(|_| circuit_builder.public_input())
@@ -649,13 +651,23 @@ where
         let diff = circuit_builder.sub(right_pis[PI_BLOCK_HEIGHT], left_plus_one);
         circuit_builder.assert_zero(diff);
     } else {
-        // Anchor: constrain the exposed leading root public inputs to the derived
-        // root-of-roots. Tracer (4a): the derivation is the LEFT accumulator's
-        // leading root copied through; the Poseidon2 absorb of the right member's
-        // genesis_id replaces it next. sub+assert_zero is CTL-safe vs Public.
+        // Anchor: constrain the exposed leading root public inputs to the
+        // in-circuit Poseidon2 absorb of the left accumulator's root and the right
+        // member's genesis_id: root = sponge(ANCHOR_TAG, left_pis[0..8] ++
+        // right_pis[0..8]). sub+assert_zero is CTL-safe vs the Public table.
         let left_pis = VerifierCircuitResult::<SC, A1>::public_table_targets(&left_result);
+        let right_pis = VerifierCircuitResult::<SC, A2>::public_table_targets(&right_result);
+        let mut preimage = Vec::with_capacity(2 * ANCHOR_ROOT_LEN);
+        preimage.extend_from_slice(&left_pis[..ANCHOR_ROOT_LEN]);
+        preimage.extend_from_slice(&right_pis[..ANCHOR_ROOT_LEN]);
+        let root = crate::genesis_boundary::in_circuit_hash_fields(
+            &mut circuit_builder,
+            crate::genesis_boundary::ANCHOR_TAG,
+            &preimage,
+        )
+        .map_err(VerificationError::CircuitBuilder)?;
         for i in 0..ANCHOR_ROOT_LEN {
-            let diff = circuit_builder.sub(anchor_root_pi[i], left_pis[i]);
+            let diff = circuit_builder.sub(anchor_root_pi[i], root[i]);
             circuit_builder.assert_zero(diff);
         }
     }
@@ -676,6 +688,7 @@ fn run_aggregation_verification_circuit<SC, A1, A2, B, const D: usize>(
     config: &SC,
     backend: &B,
     mode: AggregationMode,
+    anchor_leading: &[Val<SC>],
 ) -> Result<Traces<SC::Challenge>, VerificationError>
 where
     SC: StarkGenericConfig,
@@ -686,24 +699,13 @@ where
     SC::Challenge: From<Val<SC>>,
 {
     // Plan D: pack `right ++ left` to match the right-first allocation order in
-    // `build_aggregation_layer_circuit`. In Anchor mode the 8 leading root
-    // values (allocated first in the circuit) are prepended to stay aligned.
+    // `build_aggregation_layer_circuit`. In Anchor mode the 8 leading root values
+    // (allocated first in the circuit, constrained to the in-circuit sponge) are
+    // prepended; the caller supplies the matching off-circuit root.
     let mut public_inputs = Vec::new();
     if mode == AggregationMode::Anchor {
-        // Tracer (4a): the root values the anchor exposes are the LEFT
-        // accumulator's leading root, prepended ahead of the children's.
-        if let RecursionInput::BatchStark {
-            table_public_inputs,
-            ..
-        } = left
-        {
-            let left_leading = table_public_inputs
-                .get(PrimitiveTable::Public as usize)
-                .cloned()
-                .unwrap_or_default();
-            for v in left_leading.iter().take(8) {
-                public_inputs.push(SC::Challenge::from(*v));
-            }
+        for v in anchor_leading.iter().take(ANCHOR_ROOT_LEN) {
+            public_inputs.push(SC::Challenge::from(*v));
         }
     }
     public_inputs.extend(right_result.pack_public_inputs(right)?);
@@ -763,6 +765,10 @@ pub fn prove_aggregation_layer<SC, A1, A2, B, const D: usize>(
     config: &SC,
     backend: &B,
     params: &ProveNextLayerParams,
+    // Anchor mode only: the 8 off-circuit root-of-roots values the caller
+    // computed; prepended to the public inputs and constrained in-circuit.
+    // Empty for Chain mode.
+    anchor_leading: &[Val<SC>],
     mut prep_cache: Option<&mut Option<AggregationPrepCache<SC>>>,
 ) -> Result<RecursionOutput<SC>, VerificationError>
 where
@@ -792,6 +798,7 @@ where
             config,
             backend,
             params.aggregation_mode,
+            anchor_leading,
         )?;
         let proof = cached
             .prover
@@ -830,6 +837,7 @@ where
         config,
         backend,
         params.aggregation_mode,
+        anchor_leading,
     )?;
 
     let circuit_prover_data = {
@@ -916,6 +924,59 @@ where
         config,
         backend,
         params,
+        &[],
+        prep_cache,
+    )
+}
+
+/// Build and prove a root-of-roots ANCHOR layer: aggregate two INDEPENDENT chain
+/// heads with `AggregationMode::Anchor` (no continuity), exposing the 8-limb
+/// `anchor_leading` root that the in-circuit Poseidon2 absorb of the two heads'
+/// leading slots is constrained to. `params.aggregation_mode` must be `Anchor`
+/// and `params.num_exposed_public_values` should be [`ANCHOR_ROOT_LEN`]. The
+/// caller supplies the off-circuit root (so it equals the in-circuit derivation).
+#[allow(clippy::too_many_arguments)]
+pub fn build_and_prove_anchor_layer<SC, A1, A2, B, const D: usize>(
+    left: &RecursionInput<'_, SC, A1>,
+    right: &RecursionInput<'_, SC, A2>,
+    config: &SC,
+    backend: &B,
+    params: &ProveNextLayerParams,
+    anchor_leading: &[Val<SC>],
+    prep_cache: Option<&mut Option<AggregationPrepCache<SC>>>,
+) -> Result<RecursionOutput<SC>, VerificationError>
+where
+    SC: StarkGenericConfig + Send + Sync + Clone + 'static,
+    A1: RecursiveAir<Val<SC>, SC::Challenge, LogUpGadget>,
+    A2: RecursiveAir<Val<SC>, SC::Challenge, LogUpGadget>,
+    B: PcsRecursionBackend<SC, A1, D> + PcsRecursionBackend<SC, A2, D>,
+    Val<SC>: PrimeField64 + StarkField,
+    SC::Challenge: BasedVectorSpace<Val<SC>>
+        + From<Val<SC>>
+        + ExtensionField<Val<SC>>
+        + ExtractBinomialW<Val<SC>>,
+    SymbolicExpressionExt<Val<SC>, SC::Challenge>:
+        Algebra<SymbolicExpression<Val<SC>>> + Algebra<SC::Challenge>,
+{
+    let (verification_circuit, (left_result, right_result)) =
+        build_aggregation_layer_circuit::<SC, A1, A2, B, D>(
+            left,
+            right,
+            config,
+            backend,
+            params.aggregation_mode,
+        )?;
+
+    prove_aggregation_layer::<SC, A1, A2, B, D>(
+        left,
+        right,
+        &left_result,
+        &right_result,
+        &verification_circuit,
+        config,
+        backend,
+        params,
+        anchor_leading,
         prep_cache,
     )
 }

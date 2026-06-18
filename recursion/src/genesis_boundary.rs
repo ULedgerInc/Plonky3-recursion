@@ -30,6 +30,10 @@ pub const DIGEST_LEN: usize = 8;
 pub const META_TAG: u32 = 0x50_33_00_30;
 /// `DomainTag::Block` discriminant (`plonky3_core::commitment::DomainTag`).
 pub const BLOCK_TAG: u32 = 0x50_33_00_40;
+/// `DomainTag::Anchor` discriminant (`plonky3_core::commitment::DomainTag`). The
+/// root-of-roots absorb hashes `[prev_root(8), member_genesis_id(8)]` under it;
+/// must equal the node-side tag so off-circuit and in-circuit roots agree.
+pub const ANCHOR_TAG: u32 = 0x50_33_00_90;
 
 // AIR public-value layout (mirrors `plonky3_core::air`, post Plan E relayout:
 // the per-block XRC content digest rides the exposed window after the height,
