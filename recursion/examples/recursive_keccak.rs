@@ -330,6 +330,7 @@ macro_rules! define_field_module_keccak_quintic {
                         table_packing: layer_table_packing,
                         constraint_profile: ConstraintProfile::Standard,
                         num_exposed_public_values: 0,
+                        aggregation_mode: p3_recursion::AggregationMode::Chain,
                     };
                     let config =
                         config_with_fri_params(fri_params, security_level, disable_recompose_npo);
@@ -522,6 +523,7 @@ macro_rules! define_field_module {
                         table_packing: layer_table_packing,
                         constraint_profile: ConstraintProfile::Standard,
                         num_exposed_public_values: 0,
+                        aggregation_mode: p3_recursion::AggregationMode::Chain,
                     };
                     let config =
                         config_with_fri_params(fri_params, security_level, disable_recompose_npo);

@@ -347,6 +347,7 @@ macro_rules! define_field_module_aggregation_quintic {
                                 ),
                                 constraint_profile: ConstraintProfile::Standard,
                                 num_exposed_public_values: 0,
+                                aggregation_mode: p3_recursion::AggregationMode::Chain,
                             };
                             let agg_config: $cfg_type = $config_agg(level as u64);
 
@@ -575,6 +576,7 @@ macro_rules! define_field_module {
                                 ),
                                 constraint_profile: ConstraintProfile::Standard,
                                 num_exposed_public_values: 0,
+                                aggregation_mode: p3_recursion::AggregationMode::Chain,
                             };
                             let agg_config: $cfg_type = $config_agg(level as u64);
 

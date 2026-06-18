@@ -242,6 +242,18 @@ where
     }
 }
 
+/// Selects what an aggregation layer enforces between its two folded children.
+///
+/// `Chain` (default) is upstream behaviour: identity continuity + height lineage
+/// across the children (ULedger Plan D). `Anchor` folds two INDEPENDENT chains
+/// (no continuity); the ULedger root-of-roots anchor uses it.
+#[derive(Clone, Copy, Default, Debug, Eq, PartialEq)]
+pub enum AggregationMode {
+    #[default]
+    Chain,
+    Anchor,
+}
+
 /// Parameters for the shared recursion pipeline (table packing, optional overrides).
 #[derive(Clone, Debug)]
 pub struct ProveNextLayerParams {
@@ -251,6 +263,8 @@ pub struct ProveNextLayerParams {
     /// Number of leading Public-table values to surface as STARK `public_values`
     /// on the verify-enforced channel. `0` preserves upstream behaviour.
     pub num_exposed_public_values: usize,
+    /// What an aggregation layer enforces across its two children.
+    pub aggregation_mode: AggregationMode,
 }
 
 impl Default for ProveNextLayerParams {
@@ -259,6 +273,7 @@ impl Default for ProveNextLayerParams {
             table_packing: TablePacking::new(1, 4),
             constraint_profile: ConstraintProfile::Standard,
             num_exposed_public_values: 0,
+            aggregation_mode: AggregationMode::Chain,
         }
     }
 }
@@ -564,6 +579,7 @@ fn build_aggregation_layer_circuit<SC, A1, A2, B, const D: usize>(
     right: &RecursionInput<'_, SC, A2>,
     config: &SC,
     backend: &B,
+    mode: AggregationMode,
 ) -> Result<
     (
         Circuit<SC::Challenge>,
@@ -600,12 +616,12 @@ where
     let right_result = backend.build_verifier_circuit(right, config, &mut circuit_builder)?;
     let left_result = backend.build_verifier_circuit(left, config, &mut circuit_builder)?;
 
-    // ULedger Plan D: enforce identity continuity + height lineage across the
-    // two folded children on EVERY aggregation (not flag-gated). genesis_id
-    // (leading 8) equal; right.block_height == left.block_height + 1. Read both
-    // children's Public-table targets and emit sub+assert_zero (safe vs the
-    // Public-table CTL).
-    {
+    // ULedger Plan D: in `Chain` mode enforce identity continuity + height
+    // lineage across the two folded children. genesis_id (leading 8) equal;
+    // right.block_height == left.block_height + 1. Read both children's
+    // Public-table targets and emit sub+assert_zero (safe vs the Public-table
+    // CTL). `Anchor` mode folds two INDEPENDENT chains and enforces neither.
+    if mode == AggregationMode::Chain {
         const GENESIS_ID_LEN: usize = 8;
         const PI_BLOCK_HEIGHT: usize = 8;
         let left_pis = VerifierCircuitResult::<SC, A1>::public_table_targets(&left_result);
@@ -836,7 +852,13 @@ where
         Algebra<SymbolicExpression<Val<SC>>> + Algebra<SC::Challenge>,
 {
     let (verification_circuit, (left_result, right_result)) =
-        build_aggregation_layer_circuit::<SC, A1, A2, B, D>(left, right, config, backend)?;
+        build_aggregation_layer_circuit::<SC, A1, A2, B, D>(
+            left,
+            right,
+            config,
+            backend,
+            params.aggregation_mode,
+        )?;
 
     prove_aggregation_layer::<SC, A1, A2, B, D>(
         left,
