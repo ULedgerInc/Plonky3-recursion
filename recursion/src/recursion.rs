@@ -651,15 +651,17 @@ where
         let diff = circuit_builder.sub(right_pis[PI_BLOCK_HEIGHT], left_plus_one);
         circuit_builder.assert_zero(diff);
     } else {
-        // Anchor: constrain the exposed leading root public inputs to the
-        // in-circuit Poseidon2 absorb of the left accumulator's root and the right
-        // member's genesis_id: root = sponge(ANCHOR_TAG, left_pis[0..8] ++
-        // right_pis[0..8]). sub+assert_zero is CTL-safe vs the Public table.
+        // Anchor: absorb the right member's 4-field leaf onto the left
+        // accumulator's running root: root = sponge(ANCHOR_TAG, left_pis[0..8] ++
+        // leaf(right)). sub+assert_zero is CTL-safe vs the Public table.
         let left_pis = VerifierCircuitResult::<SC, A1>::public_table_targets(&left_result);
         let right_pis = VerifierCircuitResult::<SC, A2>::public_table_targets(&right_result);
+        let leaf_right =
+            crate::genesis_boundary::in_circuit_member_leaf(&mut circuit_builder, &right_pis)
+                .map_err(VerificationError::CircuitBuilder)?;
         let mut preimage = Vec::with_capacity(2 * ANCHOR_ROOT_LEN);
         preimage.extend_from_slice(&left_pis[..ANCHOR_ROOT_LEN]);
-        preimage.extend_from_slice(&right_pis[..ANCHOR_ROOT_LEN]);
+        preimage.extend_from_slice(&leaf_right);
         let root = crate::genesis_boundary::in_circuit_hash_fields(
             &mut circuit_builder,
             crate::genesis_boundary::ANCHOR_TAG,

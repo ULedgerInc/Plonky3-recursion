@@ -31,9 +31,11 @@ pub const META_TAG: u32 = 0x50_33_00_30;
 /// `DomainTag::Block` discriminant (`plonky3_core::commitment::DomainTag`).
 pub const BLOCK_TAG: u32 = 0x50_33_00_40;
 /// `DomainTag::Anchor` discriminant (`plonky3_core::commitment::DomainTag`). The
-/// root-of-roots absorb hashes `[prev_root(8), member_genesis_id(8)]` under it;
+/// root-of-roots absorb hashes `[prev_root(8), member_leaf(8)]` under it;
 /// must equal the node-side tag so off-circuit and in-circuit roots agree.
 pub const ANCHOR_TAG: u32 = 0x50_33_00_90;
+/// `DomainTag::AnchorLeaf` discriminant; must equal the node-side tag.
+pub const ANCHORLEAF_TAG: u32 = 0x50_33_00_91;
 
 // AIR public-value layout (mirrors `plonky3_core::air`, post Plan E relayout:
 // the per-block XRC content digest rides the exposed window after the height,
@@ -129,6 +131,21 @@ pub fn in_circuit_hash_fields<F: Field>(
     buf.push(builder.define_const(F::from_u64(inputs.len() as u64)));
     buf.extend_from_slice(inputs);
     in_circuit_padding_free_sponge(builder, &buf)
+}
+
+/// In-circuit anchor member leaf over a member head's exposed public-table
+/// targets: hash(AnchorLeaf, genesis_id(8) ++ block_height(1) ++ tx_root(8) ++
+/// xm_root(8)). Mirrors `plonky3_core::anchor::member_leaf`.
+pub fn in_circuit_member_leaf<F: Field>(
+    builder: &mut CircuitBuilder<F>,
+    member_pis: &[ExprId],
+) -> Result<[ExprId; DIGEST_LEN], CircuitBuilderError> {
+    let mut pre = Vec::with_capacity(3 * DIGEST_LEN + 1);
+    pre.extend_from_slice(&member_pis[PI_XRC..PI_XRC + DIGEST_LEN]);
+    pre.push(member_pis[PI_BLOCK_HEIGHT]);
+    pre.extend_from_slice(&member_pis[PI_TX_ROOT..PI_TX_ROOT + DIGEST_LEN]);
+    pre.extend_from_slice(&member_pis[PI_XM_ROOT..PI_XM_ROOT + DIGEST_LEN]);
+    in_circuit_hash_fields(builder, ANCHORLEAF_TAG, &pre)
 }
 
 /// In-circuit analog of `plonky3_core::commitment::meta_commitment`:
