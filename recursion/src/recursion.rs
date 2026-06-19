@@ -252,6 +252,8 @@ pub enum AggregationMode {
     #[default]
     Chain,
     Anchor,
+    /// First anchor fold: absorb BOTH children's leaves onto ANCHOR_ROOT_INIT.
+    AnchorSeed,
 }
 
 /// Limbs of the root-of-roots an anchor layer exposes (Poseidon2 digest length).
@@ -616,7 +618,7 @@ where
     // The prover supplies them (root values) and they are constrained below to the
     // derived root. `run_aggregation_verification_circuit` prepends the same 8
     // values to keep the public-input vector aligned with this allocation order.
-    let anchor_root_pi: Vec<_> = if mode == AggregationMode::Anchor {
+    let anchor_root_pi: Vec<_> = if mode != AggregationMode::Chain {
         (0..ANCHOR_ROOT_LEN)
             .map(|_| circuit_builder.public_input())
             .collect()
@@ -650,7 +652,7 @@ where
         let left_plus_one = circuit_builder.add(left_pis[PI_BLOCK_HEIGHT], one);
         let diff = circuit_builder.sub(right_pis[PI_BLOCK_HEIGHT], left_plus_one);
         circuit_builder.assert_zero(diff);
-    } else {
+    } else if mode == AggregationMode::Anchor {
         // Anchor: absorb the right member's 4-field leaf onto the left
         // accumulator's running root: root = sponge(ANCHOR_TAG, left_pis[0..8] ++
         // leaf(right)). sub+assert_zero is CTL-safe vs the Public table.
@@ -666,6 +668,43 @@ where
             &mut circuit_builder,
             crate::genesis_boundary::ANCHOR_TAG,
             &preimage,
+        )
+        .map_err(VerificationError::CircuitBuilder)?;
+        for i in 0..ANCHOR_ROOT_LEN {
+            let diff = circuit_builder.sub(anchor_root_pi[i], root[i]);
+            circuit_builder.assert_zero(diff);
+        }
+    } else {
+        // AnchorSeed: leaf(left) and leaf(right) both absorbed onto INIT (zeros):
+        // root = sponge(ANCHOR_TAG, sponge(ANCHOR_TAG, ZERO8 ++ leaf(left)) ++
+        // leaf(right)). This makes the realized root equal member_root (INIT-seeded).
+        let left_pis = VerifierCircuitResult::<SC, A1>::public_table_targets(&left_result);
+        let right_pis = VerifierCircuitResult::<SC, A2>::public_table_targets(&right_result);
+        let leaf_left =
+            crate::genesis_boundary::in_circuit_member_leaf(&mut circuit_builder, &left_pis)
+                .map_err(VerificationError::CircuitBuilder)?;
+        let leaf_right =
+            crate::genesis_boundary::in_circuit_member_leaf(&mut circuit_builder, &right_pis)
+                .map_err(VerificationError::CircuitBuilder)?;
+        let zero = circuit_builder.define_const(SC::Challenge::ZERO);
+        let mut pre1 = Vec::with_capacity(2 * ANCHOR_ROOT_LEN);
+        for _ in 0..ANCHOR_ROOT_LEN {
+            pre1.push(zero);
+        }
+        pre1.extend_from_slice(&leaf_left);
+        let step1 = crate::genesis_boundary::in_circuit_hash_fields(
+            &mut circuit_builder,
+            crate::genesis_boundary::ANCHOR_TAG,
+            &pre1,
+        )
+        .map_err(VerificationError::CircuitBuilder)?;
+        let mut pre2 = Vec::with_capacity(2 * ANCHOR_ROOT_LEN);
+        pre2.extend_from_slice(&step1);
+        pre2.extend_from_slice(&leaf_right);
+        let root = crate::genesis_boundary::in_circuit_hash_fields(
+            &mut circuit_builder,
+            crate::genesis_boundary::ANCHOR_TAG,
+            &pre2,
         )
         .map_err(VerificationError::CircuitBuilder)?;
         for i in 0..ANCHOR_ROOT_LEN {
@@ -705,7 +744,7 @@ where
     // (allocated first in the circuit, constrained to the in-circuit sponge) are
     // prepended; the caller supplies the matching off-circuit root.
     let mut public_inputs = Vec::new();
-    if mode == AggregationMode::Anchor {
+    if mode != AggregationMode::Chain {
         for v in anchor_leading.iter().take(ANCHOR_ROOT_LEN) {
             public_inputs.push(SC::Challenge::from(*v));
         }
