@@ -10,7 +10,7 @@ use p3_air::{SymbolicExpression, SymbolicExpressionExt};
 use p3_batch_stark::{CommonData, ProverData};
 use p3_circuit::symbolic::ColumnsTargets;
 use p3_circuit::tables::Traces;
-use p3_circuit::{Circuit, CircuitBuilder, CircuitRunner, NonPrimitiveOpId};
+use p3_circuit::{Circuit, CircuitBuilder, CircuitRunner, NonPrimitiveOpId, Op};
 use p3_circuit_prover::batch_stark_prover::{PrimitiveTable, TableProver};
 use p3_circuit_prover::common::{NpoAirBuilder, NpoPreprocessor, get_airs_and_degrees_with_prep};
 use p3_circuit_prover::config::StarkField;
@@ -39,21 +39,87 @@ fn proof_shape_err(e: &impl ToString) -> VerificationError {
 ///
 /// This is used to reject [`AggregationPrepCache`] hits when a new aggregation step builds a different
 /// circuit (e.g. verifying proofs from a different recursion depth that reuses a different layout even if
-/// `ProveNextLayerParams` and `config` match).
+/// `ProveNextLayerParams` and `config` match). Keyed on prove params + a structural hash of
+/// the op list, not just counts.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct AggregationCircuitFingerprint {
+    pub aggregation_mode: AggregationMode,
+    pub num_exposed_public_values: usize,
     pub witness_count: u32,
     pub public_flat_len: usize,
     pub private_flat_len: usize,
     pub ops_len: usize,
+    pub ops_hash: u64,
 }
 
-const fn aggregation_circuit_fingerprint<F>(circuit: &Circuit<F>) -> AggregationCircuitFingerprint {
+struct Fnv1a(u64);
+
+impl Default for Fnv1a {
+    fn default() -> Self {
+        Self(0xcbf2_9ce4_8422_2325)
+    }
+}
+
+impl core::hash::Hasher for Fnv1a {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.0 ^= u64::from(b);
+            self.0 = self.0.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+}
+
+fn aggregation_circuit_fingerprint<F: core::hash::Hash>(
+    circuit: &Circuit<F>,
+    params: &ProveNextLayerParams,
+) -> AggregationCircuitFingerprint {
+    use core::hash::Hash;
+    let mut hasher = Fnv1a::default();
+    for op in &circuit.ops {
+        match op {
+            Op::Const { out, val } => {
+                (0u8, out, val).hash(&mut hasher);
+            }
+            Op::Public { out, public_pos } => {
+                (1u8, out, public_pos).hash(&mut hasher);
+            }
+            Op::Alu {
+                kind,
+                a,
+                b,
+                c,
+                out,
+                intermediate_out,
+            } => {
+                (2u8, kind, a, b, c, out, intermediate_out).hash(&mut hasher);
+            }
+            Op::Hint {
+                inputs, outputs, ..
+            } => {
+                (3u8, inputs, outputs).hash(&mut hasher);
+            }
+            Op::NonPrimitiveOpWithExecutor {
+                inputs,
+                outputs,
+                op_id,
+                ..
+            } => {
+                (4u8, inputs, outputs, op_id).hash(&mut hasher);
+            }
+        }
+    }
     AggregationCircuitFingerprint {
+        aggregation_mode: params.aggregation_mode,
+        num_exposed_public_values: params.num_exposed_public_values,
         witness_count: circuit.witness_count,
         public_flat_len: circuit.public_flat_len,
         private_flat_len: circuit.private_flat_len,
         ops_len: circuit.ops.len(),
+        ops_hash: core::hash::Hasher::finish(&hasher),
     }
 }
 
@@ -810,7 +876,7 @@ pub fn prove_aggregation_layer<SC, A1, A2, B, const D: usize>(
     // computed; prepended to the public inputs and constrained in-circuit.
     // Empty for Chain mode.
     anchor_leading: &[Val<SC>],
-    mut prep_cache: Option<&mut Option<AggregationPrepCache<SC>>>,
+    mut prep_cache: Option<&mut Vec<AggregationPrepCache<SC>>>,
 ) -> Result<RecursionOutput<SC>, VerificationError>
 where
     SC: StarkGenericConfig + Send + Sync + Clone + 'static,
@@ -825,30 +891,30 @@ where
     SymbolicExpressionExt<Val<SC>, SC::Challenge>:
         Algebra<SymbolicExpression<Val<SC>>> + Algebra<SC::Challenge>,
 {
-    let current_fp = aggregation_circuit_fingerprint(verification_circuit);
-    if let Some(ref mut cache_slot) = prep_cache
-        && let Some(cached) = cache_slot.as_ref()
-        && cached.circuit_fingerprint == current_fp
-    {
-        let traces = run_aggregation_verification_circuit::<SC, A1, A2, B, D>(
-            left,
-            right,
-            left_result,
-            right_result,
-            verification_circuit,
-            config,
-            backend,
-            params.aggregation_mode,
-            anchor_leading,
-        )?;
-        let proof = cached
-            .prover
-            .prove_all_tables(&traces, &cached.circuit_prover_data)
-            .map_err(|e| proof_shape_err(&e.to_string()))?;
-        return Ok(RecursionOutput(
-            proof,
-            Rc::clone(&cached.circuit_prover_data),
-        ));
+    let current_fp = aggregation_circuit_fingerprint(verification_circuit, params);
+    if let Some(pool) = prep_cache.as_deref_mut() {
+        if let Some(idx) = pool.iter().position(|c| c.circuit_fingerprint == current_fp) {
+            let traces = run_aggregation_verification_circuit::<SC, A1, A2, B, D>(
+                left,
+                right,
+                left_result,
+                right_result,
+                verification_circuit,
+                config,
+                backend,
+                params.aggregation_mode,
+                anchor_leading,
+            )?;
+            let cached = &pool[idx];
+            let proof = cached
+                .prover
+                .prove_all_tables(&traces, &cached.circuit_prover_data)
+                .map_err(|e| proof_shape_err(&e.to_string()))?;
+            return Ok(RecursionOutput(
+                proof,
+                Rc::clone(&cached.circuit_prover_data),
+            ));
+        }
     }
 
     let (airs_degrees, primitive_columns, non_primitive_columns) = {
@@ -900,9 +966,9 @@ where
         .prove_all_tables(&traces, &circuit_prover_data)
         .map_err(|e| proof_shape_err(&e.to_string()))?;
 
-    if let Some(ref mut cache_slot) = prep_cache {
+    if let Some(pool) = prep_cache.as_deref_mut() {
         let circuit_prover_data_rc = Rc::new(circuit_prover_data);
-        **cache_slot = Some(AggregationPrepCache {
+        pool.push(AggregationPrepCache {
             circuit_fingerprint: current_fp,
             circuit_prover_data: Rc::clone(&circuit_prover_data_rc),
             prover,
@@ -932,7 +998,7 @@ pub fn build_and_prove_aggregation_layer<SC, A1, A2, B, const D: usize>(
     config: &SC,
     backend: &B,
     params: &ProveNextLayerParams,
-    prep_cache: Option<&mut Option<AggregationPrepCache<SC>>>,
+    prep_cache: Option<&mut Vec<AggregationPrepCache<SC>>>,
 ) -> Result<RecursionOutput<SC>, VerificationError>
 where
     SC: StarkGenericConfig + Send + Sync + Clone + 'static,
@@ -984,7 +1050,7 @@ pub fn build_and_prove_anchor_layer<SC, A1, A2, B, const D: usize>(
     backend: &B,
     params: &ProveNextLayerParams,
     anchor_leading: &[Val<SC>],
-    prep_cache: Option<&mut Option<AggregationPrepCache<SC>>>,
+    prep_cache: Option<&mut Vec<AggregationPrepCache<SC>>>,
 ) -> Result<RecursionOutput<SC>, VerificationError>
 where
     SC: StarkGenericConfig + Send + Sync + Clone + 'static,
