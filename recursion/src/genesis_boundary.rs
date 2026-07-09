@@ -168,32 +168,26 @@ pub fn in_circuit_meta_commitment<F: Field>(
 }
 
 /// In-circuit analog of `plonky3_core::commitment::block_commitment`:
-/// `hash_fields(Block, [height, prev_chain(8), tx_root(8), xm_root(8), meta(8),
-/// prev_proof(8)])`.
+/// `hash_fields(Block, [height, tx_root(8), xm_root(8), meta(8)])`.
 pub fn in_circuit_block_commitment<F: Field>(
     builder: &mut CircuitBuilder<F>,
     block_height: ExprId,
-    prev_chain: &[ExprId; DIGEST_LEN],
     tx_root: &[ExprId; DIGEST_LEN],
     xm_root: &[ExprId; DIGEST_LEN],
     meta: &[ExprId; DIGEST_LEN],
-    prev_proof: &[ExprId; DIGEST_LEN],
 ) -> Result<[ExprId; DIGEST_LEN], CircuitBuilderError> {
-    let mut payload = Vec::with_capacity(1 + 5 * DIGEST_LEN);
+    let mut payload = Vec::with_capacity(1 + 3 * DIGEST_LEN);
     payload.push(block_height);
-    payload.extend_from_slice(prev_chain);
     payload.extend_from_slice(tx_root);
     payload.extend_from_slice(xm_root);
     payload.extend_from_slice(meta);
-    payload.extend_from_slice(prev_proof);
     in_circuit_hash_fields(builder, BLOCK_TAG, &payload)
 }
 
 /// Apply the genesis boundary: re-derive `meta` and `block_commitment`
 /// in-circuit from the bound base public values (`air_public_targets`) plus the
 /// fixed `params` digest limbs, then constrain the exposed leading-8
-/// (`genesis_id`) equal to `block_commitment`. Genesis-only (`prev_chain` /
-/// `prev_proof` are EMPTY constants).
+/// (`genesis_id`) equal to `block_commitment`.
 ///
 /// `params` are the `params_digest()` limbs already embedded into the circuit
 /// field. `air_public_targets` must follow the Plan E 38-wide layout.
@@ -219,9 +213,6 @@ pub fn apply_genesis_boundary<F: Field>(
     let params_e: [ExprId; DIGEST_LEN] =
         core::array::from_fn(|i| builder.define_const(params[i]));
 
-    let zero = builder.define_const(F::ZERO);
-    let empty = [zero; DIGEST_LEN];
-
     let meta = in_circuit_meta_commitment(
         builder,
         block_height,
@@ -230,15 +221,7 @@ pub fn apply_genesis_boundary<F: Field>(
         xm_count,
         &params_e,
     )?;
-    let block = in_circuit_block_commitment(
-        builder,
-        block_height,
-        &empty,
-        &tx_root,
-        &xm_root,
-        &meta,
-        &empty,
-    )?;
+    let block = in_circuit_block_commitment(builder, block_height, &tx_root, &xm_root, &meta)?;
 
     // Constrain genesis_id (leading-8) == block_commitment. Consume each
     // CTL-exposed digest limb via an ALU `sub`+`assert_zero` (not `connect`):
