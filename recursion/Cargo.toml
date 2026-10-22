@@ -127,5 +127,9 @@ path = "tests/suites/whir_recursion.rs"
 name = "whir_quintic"
 path = "tests/whir_quintic.rs"
 
+[[test]]
+name = "ul_spike_statement"
+path = "tests/ul_spike_statement.rs"
+
 [lints]
 workspace = true
