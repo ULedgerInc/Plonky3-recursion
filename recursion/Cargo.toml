@@ -131,5 +131,9 @@ path = "tests/whir_quintic.rs"
 name = "ul_spike_statement"
 path = "tests/ul_spike_statement.rs"
 
+[[test]]
+name = "ul_child_key_targets"
+path = "tests/ul_child_key_targets.rs"
+
 [lints]
 workspace = true

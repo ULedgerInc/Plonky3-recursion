@@ -973,6 +973,40 @@ where
 pub type CheckedFriVerifierResult<SC> =
     CheckedVerifierResult<FriVerifierResult<SC>, ValidatedFriContext, Val<SC>>;
 
+impl<SC> CheckedFriVerifierResult<SC>
+where
+    SC: FriRecursionConfig,
+    SC::Pcs: RecursivePcs<
+            SC,
+            SC::InputProof,
+            SC::OpeningProof,
+            SC::Commitment,
+            <SC::Pcs as Pcs<SC::Challenge, SC::Challenger>>::Domain,
+        >,
+{
+    /// AIR-public targets the verified child consumes for `instance`. A uni-STARK child has the
+    /// single instance `0`.
+    pub fn air_public_targets(&self, instance: usize) -> Option<&[crate::Target]> {
+        match &self.inner {
+            FriVerifierResult::UniStark(builder, ..) => {
+                (instance == 0).then_some(builder.air_public_targets.as_slice())
+            }
+            FriVerifierResult::BatchStark(builder, ..) => {
+                builder.air_public_targets.get(instance).map(Vec::as_slice)
+            }
+        }
+    }
+
+    pub const fn preprocessed_commitment(&self) -> Option<&SC::Commitment> {
+        match &self.inner {
+            FriVerifierResult::UniStark(builder, ..) => builder.preprocessed_commit.as_ref(),
+            FriVerifierResult::BatchStark(builder, ..) => {
+                builder.common_data.preprocessed_commitment()
+            }
+        }
+    }
+}
+
 impl<SC, A> VerifierCircuitResult<SC, A> for CheckedFriVerifierResult<SC>
 where
     SC: FriRecursionConfig,
