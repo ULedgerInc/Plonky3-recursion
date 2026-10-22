@@ -867,6 +867,7 @@ impl Poseidon1Prover {
                     1 => Poseidon1AirWrapperInner::BabyBearD1Width16Bus1(Box::new(
                         BabyBearD1Width16::default_air_with_preprocessed(prep, min_height),
                     )),
+                    4 => return None,
                     5 => Poseidon1AirWrapperInner::BabyBearD1Width16Bus5(Box::new(
                         BabyBearD1Width16::default_air_with_preprocessed_witness_bus5(
                             prep, min_height,
@@ -900,6 +901,7 @@ impl Poseidon1Prover {
                     1 => Poseidon1AirWrapperInner::KoalaBearD1Width16Bus1(Box::new(
                         KoalaBearD1Width16::default_air_with_preprocessed(prep, min_height),
                     )),
+                    4 => return None,
                     5 => Poseidon1AirWrapperInner::KoalaBearD1Width16Bus5(Box::new(
                         KoalaBearD1Width16::default_air_with_preprocessed_witness_bus5(
                             prep, min_height,
@@ -1101,6 +1103,7 @@ impl Poseidon1Prover {
                             matrix_f,
                         )
                     }
+                    4 => return None,
                     5 => {
                         let air = BabyBearD1Width16::default_air_with_preprocessed_witness_bus5(
                             preprocessed,
@@ -1194,6 +1197,7 @@ impl Poseidon1Prover {
                             matrix_f,
                         )
                     }
+                    4 => return None,
                     5 => {
                         let air = KoalaBearD1Width16::default_air_with_preprocessed_witness_bus5(
                             preprocessed,

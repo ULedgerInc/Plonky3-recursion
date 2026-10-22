@@ -517,7 +517,8 @@ impl<const WIDTH: usize, const RATE: usize, C: ChallengerPermConfig>
     }
 
     /// Extra Poseidon2 table configs whose circuit extension degree equals
-    /// `table_degree`, de-duplicated and excluding the challenger config.
+    /// `table_degree`, de-duplicated and excluding the challenger config. A quartic table
+    /// degree also admits the BabyBear D=1 width-16 config, whose AIR has a quartic witness bus.
     fn extra_poseidon2_table_configs_for_degree(
         &self,
         table_degree: usize,
@@ -526,7 +527,9 @@ impl<const WIDTH: usize, const RATE: usize, C: ChallengerPermConfig>
         let challenger_shape = challenger.map(Poseidon2Config::without_challenger_role);
         let mut configs = Vec::new();
         for &config in &self.extra_poseidon2_table_configs {
-            if config.d() == table_degree
+            let degree_matches = config.d() == table_degree
+                || (table_degree == 4 && config == Poseidon2Config::BABY_BEAR_D1_W16);
+            if degree_matches
                 && Some(config) != challenger
                 && Some(config.without_challenger_role()) != challenger_shape
                 && !configs.contains(&config)

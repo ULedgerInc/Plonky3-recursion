@@ -20,12 +20,14 @@
 mod builder;
 pub mod call;
 pub(crate) mod config;
+mod lift_quartic;
 pub(crate) mod plugin;
 pub mod state;
 pub mod trace;
 
 pub use call::{Poseidon2PermCall, Poseidon2PermCallBase};
 pub use config::Poseidon2Config;
+pub use lift_quartic::LiftPermToQuartic;
 pub(crate) use plugin::Poseidon2CircuitPlugin;
 pub use state::Poseidon2PermPrivateData;
 pub use trace::{

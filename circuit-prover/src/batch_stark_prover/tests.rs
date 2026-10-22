@@ -3,16 +3,18 @@ extern crate std;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use p3_baby_bear::BabyBear;
+use p3_baby_bear::{BabyBear, default_babybear_poseidon2_16};
 use p3_circuit::StatementSchema;
 use p3_circuit::builder::CircuitBuilder;
 use p3_circuit::ops::poseidon1_perm::{
     KoalaBearD1Width16 as P1KoalaBearD1Width16, Poseidon1PermCallBase,
 };
-use p3_circuit::ops::poseidon2_perm::{GoldilocksD2Width8, Poseidon2PermCallBase};
+use p3_circuit::ops::poseidon2_perm::{
+    GoldilocksD2Width8, LiftPermToQuartic, Poseidon2PermCall, Poseidon2PermCallBase,
+};
 use p3_circuit::ops::{
-    KoalaBearD1Width16, NpoTypeId, Op, Poseidon1Config, Poseidon2Config, PrimitiveOpType,
-    generate_poseidon1_trace, generate_poseidon2_trace, generate_recompose_trace,
+    BabyBearD1Width16, KoalaBearD1Width16, NpoTypeId, Op, Poseidon1Config, Poseidon2Config,
+    PrimitiveOpType, generate_poseidon1_trace, generate_poseidon2_trace, generate_recompose_trace,
 };
 use p3_circuit::tables::NonPrimitiveTrace;
 use p3_commit::{
@@ -2265,6 +2267,195 @@ fn test_koalabear_quintic_trinomial_batch_stark_poseidon_d1_sponge_chain() {
     prover
         .verify_all_tables::<QuinticTrinomialExtensionField<KoalaBear>>(&proof)
         .unwrap();
+}
+
+type BabyBearEF4 = BinomialExtensionField<BabyBear, 4>;
+
+const D4_SHARED: Poseidon2Config = Poseidon2Config::BABY_BEAR_D4_W16.for_shared_challenger_table();
+
+fn d1_table_in_d4_circuit() -> (
+    p3_circuit::Circuit<BabyBearEF4>,
+    PreparedCircuitProver<BabyBearConfig>,
+) {
+    type BabyBearD4Width16 = p3_poseidon2_circuit_air::BabyBearD4Width16;
+
+    let mut builder = CircuitBuilder::<BabyBearEF4>::new();
+    builder.enable_poseidon2_perm::<BabyBearD4Width16, _>(
+        generate_poseidon2_trace::<BabyBearEF4, BabyBearD4Width16>,
+        default_babybear_poseidon2_16(),
+    );
+    builder.enable_poseidon2_perm_base::<BabyBearD1Width16, _>(
+        generate_poseidon2_trace::<BabyBearEF4, BabyBearD1Width16>,
+        LiftPermToQuartic::new(default_babybear_poseidon2_16()),
+    );
+
+    let ext_input = builder.public_input();
+    let (_, ext_outputs) = builder
+        .add_poseidon2_perm(&Poseidon2PermCall {
+            config: Poseidon2Config::BABY_BEAR_D4_W16,
+            new_start: true,
+            merkle_path: false,
+            mmcs_bit: None,
+            mmcs_bit2: None,
+            inputs: vec![Some(ext_input), None, None, None],
+            out_ctl: vec![true, false],
+            return_all_outputs: false,
+            absorb_len: 0,
+        })
+        .unwrap();
+
+    let mut inputs = [None; 16];
+    inputs[0] = Some(builder.public_input());
+    inputs[1] = Some(builder.public_input());
+    let mut outputs = [None; 16];
+    for row in 0..3 {
+        let last = row == 2;
+        let (_, row_outputs) = builder
+            .add_poseidon2_perm_base(&Poseidon2PermCallBase {
+                config: Poseidon2Config::BABY_BEAR_D1_W16,
+                new_start: row == 0,
+                inputs: if row == 0 { inputs } else { [None; 16] },
+                out_ctl: [last, last, false, false, false, false, false, false],
+                return_all_outputs: false,
+                absorb_len: 0,
+            })
+            .unwrap();
+        outputs = row_outputs;
+    }
+    for output in [ext_outputs[0], outputs[0], outputs[1]] {
+        let expected = builder.public_input();
+        let diff = builder.sub(output.unwrap(), expected);
+        builder.assert_zero(diff);
+    }
+    let circuit = builder.build().unwrap();
+
+    let npo_prep: Vec<Box<dyn NpoPreprocessor<BabyBear>>> =
+        vec![Box::new(Poseidon2SharedPreprocessor::new(vec![D4_SHARED]))];
+    let air_builders = poseidon2_air_builders_for_configs::<BabyBearConfig, 4>(vec![
+        D4_SHARED,
+        Poseidon2Config::BABY_BEAR_D1_W16,
+    ]);
+    let mut prover = BatchStarkProver::new(config::baby_bear());
+    for table in [D4_SHARED, Poseidon2Config::BABY_BEAR_D1_W16] {
+        prover.register_table_prover(Box::new(Poseidon2Prover::new(
+            table,
+            ConstraintProfile::Standard,
+        )));
+    }
+    let prepared = prover
+        .prepare_circuit::<BabyBearEF4, 4>(
+            &circuit,
+            &npo_prep,
+            &air_builders,
+            ConstraintProfile::Standard,
+        )
+        .unwrap();
+    (circuit, prepared)
+}
+
+fn d1_table_in_d4_public_inputs(a: BabyBearEF4, b: BabyBearEF4) -> [BabyBearEF4; 6] {
+    let perm = default_babybear_poseidon2_16();
+    let ext_input = BabyBearEF4::from(BabyBear::from_u64(7));
+    let mut ext_state = [BabyBear::ZERO; 16];
+    ext_state[..4].copy_from_slice(ext_input.as_basis_coefficients_slice());
+    let ext_state = perm.permute(ext_state);
+    let ext_output = BabyBearEF4::from_basis_coefficients_slice(&ext_state[..4]).unwrap();
+
+    let mut state = [BabyBear::ZERO; 16];
+    state[0] = a.as_basis_coefficients_slice()[0];
+    state[1] = b.as_basis_coefficients_slice()[0];
+    for _ in 0..3 {
+        state = perm.permute(state);
+    }
+    [
+        ext_input,
+        a,
+        b,
+        ext_output,
+        state[0].into(),
+        state[1].into(),
+    ]
+}
+
+#[test]
+fn d1_table_in_d4_circuit_proves_and_verifies() {
+    let (circuit, prepared) = d1_table_in_d4_circuit();
+    let mut runner = circuit.runner();
+    runner
+        .set_public_inputs(&d1_table_in_d4_public_inputs(
+            BabyBear::from_u64(11).into(),
+            BabyBear::from_u64(13).into(),
+        ))
+        .unwrap();
+    let traces = runner.run().unwrap();
+
+    let proof = prepared.prove(&traces).unwrap();
+    assert_eq!(proof.ext_degree, 4);
+    let tables: Vec<_> = proof.non_primitives.iter().map(|t| &t.op_type).collect();
+    assert_eq!(
+        tables,
+        [
+            &NpoTypeId::poseidon2_perm(D4_SHARED),
+            &NpoTypeId::poseidon2_perm(Poseidon2Config::BABY_BEAR_D1_W16),
+        ]
+    );
+    prepared.verifier().verify(&proof, &[]).unwrap();
+}
+
+#[test]
+fn d1_table_in_d4_circuit_rejects_a_nonzero_high_limb() {
+    let (circuit, prepared) = d1_table_in_d4_circuit();
+    let forged = BabyBearEF4::from_basis_coefficients_slice(&[
+        BabyBear::from_u64(11),
+        BabyBear::ONE,
+        BabyBear::ZERO,
+        BabyBear::ZERO,
+    ])
+    .unwrap();
+    let mut runner = circuit.runner();
+    runner
+        .set_public_inputs(&d1_table_in_d4_public_inputs(
+            forged,
+            BabyBear::from_u64(13).into(),
+        ))
+        .unwrap();
+    let traces = runner.run().unwrap();
+
+    let prove_and_verify = || {
+        let proof = prepared
+            .prove(&traces)
+            .map_err(AlgebraicProofCheckError::Prove)?;
+        prepared
+            .verifier()
+            .verify(&proof, &[])
+            .map_err(AlgebraicProofCheckError::Verify)
+    };
+    #[cfg(debug_assertions)]
+    let result = match run_with_strict_debug_oracle(prove_and_verify) {
+        Ok(result) => result,
+        Err(kind) => Err(AlgebraicProofCheckError::DebugPanic(kind)),
+    };
+    #[cfg(not(debug_assertions))]
+    let result = prove_and_verify();
+    #[cfg(debug_assertions)]
+    assert!(
+        matches!(
+            &result,
+            Err(AlgebraicProofCheckError::DebugPanic(
+                DebugRejectionKind::Lookup
+            ))
+        ),
+        "a non-base D=1 input must fail the witness lookup: {result:?}"
+    );
+    #[cfg(not(debug_assertions))]
+    assert!(
+        matches!(
+            &result,
+            Err(AlgebraicProofCheckError::Verify(BatchStarkProverError::Verify(message)))
+                if message.contains("Lookup")
+        ),
+        "a non-base D=1 input must fail the witness lookup: {result:?}"
+    );
 }
 
 /// Strict mode must reach non-primitive (NPO) tables too, not only the three primitive

@@ -358,7 +358,7 @@ fn dual_family_legacy_input_and_extra_policy_remain_ordered() {
         4,
         Poseidon2Config::BABY_BEAR_D4_W16,
         Poseidon2Config::BABY_BEAR_D4_W24,
-        Poseidon2Config::BABY_BEAR_D1_W16
+        Poseidon2Config::KOALA_BEAR_D1_W16
     );
 }
 
@@ -461,7 +461,7 @@ fn no_family_preserves_distinct_none_fallbacks_and_matching_extras() {
         BabyBearD4Poseidon2BinaryConfig,
         Poseidon2Config::BABY_BEAR_D4_W24,
         Poseidon2Config::BABY_BEAR_D4_W16,
-        Poseidon2Config::BABY_BEAR_D1_W16
+        Poseidon2Config::KOALA_BEAR_D1_W16
     );
     let rec = NpoTypeId::recompose_with_coeff_lookups();
     let backend = FriRecursionBackend::<16, 8, _>::new_d5(NoFamily(1));
@@ -608,6 +608,45 @@ fn poseidon1_marked_d4_plain_d2_and_ordinary_d1_keep_roles() {
         output_ids!(d1, D1Backend, KoalaBearD4Poseidon2BinaryConfig, 4, 4),
         vec![NpoTypeId::poseidon1_perm(ordinary_d1), rec]
     );
+}
+
+#[test]
+fn baby_bear_d1_extra_joins_only_quartic_tables() {
+    type D2 = FriRecursionBackendForExt<2, 8, 4, Poseidon2Config>;
+    type D4 = FriRecursionBackendForExt<4, 16, 8, Poseidon2Config>;
+    let p2 = Poseidon2Config::BABY_BEAR_D4_W16;
+    let d1 = Poseidon2Config::BABY_BEAR_D1_W16;
+    let d1_id = NpoTypeId::poseidon2_perm(d1);
+    let backend = FriRecursionBackend::<16, 8, _>::new(p2)
+        .with_extra_poseidon2_table(d1)
+        .with_extra_poseidon2_table(Poseidon2Config::KOALA_BEAR_D1_W16)
+        .for_extension_degree::<4>();
+    let expected = vec![
+        NpoTypeId::poseidon2_perm(p2.for_shared_challenger_table()),
+        d1_id.clone(),
+        NpoTypeId::recompose_with_coeff_lookups(),
+    ];
+    assert_eq!(
+        output_ids!(backend, D4, BabyBearD4Poseidon2BinaryConfig, 4, 4),
+        expected
+    );
+    assert_eq!(
+        input_ids!(backend, D4, BabyBearD4Poseidon2BinaryConfig, 4, 4, &[]),
+        expected
+    );
+    let air = <D4 as PcsRecursionBackend<BabyBearD4Poseidon2BinaryConfig, FibonacciAir, 4>>::
+        non_primitive_air_builders(&backend);
+    assert_eq!(air.len(), 3);
+    assert!(
+        air[1]
+            .try_build(&d1_id, &[], 1, 1, ConstraintProfile::Standard)
+            .is_some()
+    );
+
+    let d2 = FriRecursionBackend::<8, 4, _>::new(Poseidon2Config::GOLDILOCKS_D2_W8)
+        .with_extra_poseidon2_table(d1)
+        .for_extension_degree::<2>();
+    assert!(!output_ids!(d2, D2, GoldilocksD2Poseidon2BinaryConfig, 2, 2).contains(&d1_id));
 }
 
 #[test]

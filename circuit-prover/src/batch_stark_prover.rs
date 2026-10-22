@@ -171,11 +171,13 @@ fn run_native_proof_in_pool<R>(
 /// Returns the witness-bus dimension for a D=1 Poseidon config given the circuit's extension
 /// degree, or `None` if the scale is not supported.
 ///
-/// Currently supported: 1 (base-field circuit) and 5 (KoalaBear quintic).
+/// Currently supported: 1 (base-field circuit), 4 (BabyBear Poseidon2 only) and 5 (KoalaBear
+/// quintic).
 #[inline]
 const fn poseidon_d1_witness_bus_dim(witness_ctl_scale: u32) -> Option<u32> {
     match witness_ctl_scale {
         1 => Some(1),
+        4 => Some(4),
         5 => Some(5),
         _ => None,
     }
