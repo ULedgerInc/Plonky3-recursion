@@ -25,10 +25,6 @@ pub enum FriInputError {
     MaxArityExceedsTwoAdicity,
     #[error("native FRI {name} proof-of-work bits are not supported by the field/word limits")]
     PowBitsOutOfRange { name: &'static str },
-    #[error(
-        "native FRI batch-phase proof of work ({bits} bits) is not supported by the recursive verifier"
-    )]
-    UnsupportedBatchPow { bits: usize },
     #[error("native FRI scalar {name} does not match recursive parameters")]
     ScalarMismatch { name: &'static str },
     #[error("native FRI has {native} queries but recursive verifier requires {minimum}")]
@@ -62,6 +58,7 @@ pub struct NativeFriParams {
     num_queries: usize,
     commit_pow_bits: usize,
     query_pow_bits: usize,
+    batch_pow_bits: usize,
 }
 
 impl NativeFriParams {
@@ -81,13 +78,6 @@ impl NativeFriParams {
         if params.log_blowup == 0 {
             return Err(FriInputError::ZeroBlowup);
         }
-        // The recursive FRI verifier replays no batch-phase grind, so it only accepts the zero
-        // difficulty, at which the native transcript absorbs nothing for that phase.
-        if params.batch_proof_of_work_bits != 0 {
-            return Err(FriInputError::UnsupportedBatchPow {
-                bits: params.batch_proof_of_work_bits,
-            });
-        }
         for (name, value) in [
             ("log_blowup", params.log_blowup),
             ("log_final_poly_len", params.log_final_poly_len),
@@ -100,6 +90,7 @@ impl NativeFriParams {
         for (name, bits) in [
             ("commit", params.commit_proof_of_work_bits),
             ("query", params.query_proof_of_work_bits),
+            ("batch", params.batch_proof_of_work_bits),
         ] {
             if bits >= usize::BITS as usize
                 || (bits != 0
@@ -116,6 +107,7 @@ impl NativeFriParams {
             num_queries: params.num_queries,
             commit_pow_bits: params.commit_proof_of_work_bits,
             query_pow_bits: params.query_proof_of_work_bits,
+            batch_pow_bits: params.batch_proof_of_work_bits,
         };
         snapshot.validate_field::<F>()?;
         Ok(snapshot)
@@ -177,6 +169,7 @@ impl NativeFriParams {
         for (name, bits) in [
             ("commit", self.commit_pow_bits),
             ("query", self.query_pow_bits),
+            ("batch", self.batch_pow_bits),
         ] {
             if bits >= usize::BITS as usize
                 || (bits != 0
@@ -209,6 +202,11 @@ impl NativeFriParams {
                 "query_pow_bits",
                 self.query_pow_bits,
                 recursive.query_pow_bits,
+            ),
+            (
+                "batch_pow_bits",
+                self.batch_pow_bits,
+                recursive.batch_pow_bits,
             ),
         ] {
             if native != recursive {
@@ -261,6 +259,8 @@ pub struct FriVerifierParams {
     commit_pow_bits: usize,
     /// Number of query proof-of-work bits required
     query_pow_bits: usize,
+    /// Number of batch-phase proof-of-work bits required
+    batch_pow_bits: usize,
     /// Minimum number of FRI query proofs required for soundness.
     ///
     /// The recursive verifier enforces `fri_proof_num_queries(proof) >= num_queries`
@@ -316,8 +316,24 @@ impl FriVerifierParams {
             max_log_arity,
             commit_pow_bits,
             query_pow_bits,
+            batch_pow_bits: 0,
             num_queries,
             permutation_config: permutation_config.into(),
+        })
+    }
+
+    pub fn try_with_batch_pow_bits(
+        self,
+        batch_pow_bits: usize,
+    ) -> Result<Self, FriVerifierParamsError> {
+        if batch_pow_bits >= usize::BITS as usize || u32::try_from(batch_pow_bits).is_err() {
+            return Err(FriVerifierParamsError::LogNotRepresentable {
+                name: "batch_pow_bits",
+            });
+        }
+        Ok(Self {
+            batch_pow_bits,
+            ..self
         })
     }
 
@@ -358,6 +374,9 @@ impl FriVerifierParams {
     }
     pub const fn query_pow_bits(&self) -> usize {
         self.query_pow_bits
+    }
+    pub const fn batch_pow_bits(&self) -> usize {
+        self.batch_pow_bits
     }
     pub const fn num_queries(&self) -> usize {
         self.num_queries
@@ -505,6 +524,33 @@ mod tests {
     }
 
     #[test]
+    fn native_snapshot_records_batch_pow() {
+        let mut params = native(1, 0, 1, 2, 0, 0);
+        params.batch_proof_of_work_bits = 3;
+        let snapshot = NativeFriParams::try_from_native::<BabyBear, _>(&params).unwrap();
+        let recursive = FriVerifierParams::with_mmcs(1, 0, 1, 0, 0, 2, p2())
+            .try_with_batch_pow_bits(3)
+            .unwrap();
+        assert_eq!(recursive.batch_pow_bits(), 3);
+        assert_eq!(snapshot.validate_recursive(&recursive), Ok(()));
+    }
+
+    #[test]
+    fn native_snapshot_rejects_a_batch_pow_mismatch() {
+        let mut params = native(1, 0, 1, 2, 0, 0);
+        params.batch_proof_of_work_bits = 3;
+        let snapshot = NativeFriParams::try_from_native::<BabyBear, _>(&params).unwrap();
+        let recursive = FriVerifierParams::with_mmcs(1, 0, 1, 0, 0, 2, p2());
+        assert_eq!(recursive.batch_pow_bits(), 0);
+        assert_eq!(
+            snapshot.validate_recursive(&recursive),
+            Err(FriInputError::ScalarMismatch {
+                name: "batch_pow_bits"
+            })
+        );
+    }
+
+    #[test]
     fn native_snapshot_rejects_height_overflow_and_field_height() {
         assert_eq!(
             NativeFriParams::try_from_native::<BabyBear, _>(&native(usize::MAX, 1, 1, 2, 0, 0)),
@@ -528,6 +574,7 @@ mod tests {
             num_queries: 1,
             commit_pow_bits: 0,
             query_pow_bits: 0,
+            batch_pow_bits: 0,
         };
         assert_eq!(
             word_limited.validate_field::<BabyBear>(),
@@ -540,6 +587,7 @@ mod tests {
             num_queries: 1,
             commit_pow_bits: 0,
             query_pow_bits: 0,
+            batch_pow_bits: 0,
         };
         assert_eq!(
             combined_word_limited.validate_field::<BabyBear>(),
