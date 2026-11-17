@@ -295,6 +295,7 @@ where
 
     usage.add_final_poly_evaluations(limits, proof.final_poly.len())?;
     usage.add_scalar_elements(limits, proof.final_poly.len())?;
+    usage.add_scalar_elements(limits, 1)?;
     usage.add_scalar_elements(limits, proof.commit_pow_witnesses.len())?;
     usage.add_scalar_elements(limits, 1)?;
     usage.check(limits)?;
@@ -517,7 +518,7 @@ where
         phase_private_total,
         hiding_tail_total,
         phase_cap_public_total,
-        proof.commit_pow_witnesses.len(),
+        proof.commit_pow_witnesses.len() + 1,
         proof.final_poly.len(),
     )
 }

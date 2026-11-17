@@ -11,6 +11,7 @@ pub struct MerkleCapShape {
 /// Complete allocation-relevant structure of a native FRI proof.
 #[derive(Clone, PartialEq, Eq)]
 pub struct FriShape<C, I, M, W> {
+    pub(crate) batch_pow_witness: W,
     pub(crate) commit_phase_commits: Vec<C>,
     pub(crate) commit_pow_witnesses: Vec<W>,
     pub(crate) input_openings: I,

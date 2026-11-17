@@ -907,6 +907,61 @@ mod baby_bear_d4 {
             .expect("valid PoW witness should satisfy circuit constraints");
     }
 
+    #[test]
+    fn test_check_pow_witness_rejects_invalid_witness() {
+        use p3_circuit::CircuitError;
+
+        let perm = default_babybear_poseidon2_16();
+        let pow_bits = 2usize;
+
+        let mut native = DuplexChallenger::<F, _, WIDTH, RATE>::new(perm);
+        let mut circuit = setup_circuit_with_poseidon2();
+        let mut circuit_challenger =
+            CircuitChallenger::<WIDTH, RATE, Poseidon2Config>::new_babybear();
+
+        for i in 0..RATE {
+            let val = F::from_u64(i as u64 + 55);
+            native.observe(val);
+            let t = circuit.define_const(EF::from(val));
+            RecursiveChallenger::<F, EF>::observe(&mut circuit_challenger, &mut circuit, t);
+        }
+
+        let witness = (0u64..)
+            .find(|&w| {
+                let mut probe = native.clone();
+                probe.observe(F::from_u64(w));
+                probe.sample_bits(pow_bits) != 0
+            })
+            .expect("a failing PoW witness exists");
+        let witness_f = F::from_u64(witness);
+
+        native.observe(witness_f);
+        assert_ne!(
+            native.sample_bits(pow_bits),
+            0,
+            "native PoW witness check must fail"
+        );
+
+        let witness_target = circuit.define_const(EF::from(witness_f));
+        RecursiveChallenger::<F, EF>::check_pow_witness(
+            &mut circuit_challenger,
+            &mut circuit,
+            pow_bits,
+            witness_target,
+        )
+        .expect("check_pow_witness should build");
+
+        let compiled = circuit.build().expect("circuit should build");
+        let err = compiled
+            .runner()
+            .run()
+            .expect_err("invalid PoW witness must violate the circuit constraints");
+        assert!(
+            matches!(err, CircuitError::WitnessConflict { .. }),
+            "expected WitnessConflict, got {err:?}"
+        );
+    }
+
     /// Test that `check_pow_witness` with `pow_bits = 0` is a no-op: the circuit
     /// state is unchanged and running succeeds without any additional Poseidon2
     /// calls.

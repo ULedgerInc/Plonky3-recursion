@@ -43,14 +43,22 @@ struct FibonacciTestSetup {
     air: FibonacciAir,
 }
 
-fn build_fibonacci_test_setup() -> FibonacciTestSetup {
+fn build_fibonacci_test_setup(batch_pow_bits: usize) -> FibonacciTestSetup {
     let n = 1 << 3;
     let x = 21;
 
     let trace = generate_trace_rows::<F>(0, 1, n);
 
-    let config = make_test_config();
-    // Same default permutation make_test_config uses, for the recursive verifier circuit.
+    let (val_mmcs, fri_params) = test_fri_instance();
+    let fri_params = FriParameters {
+        batch_proof_of_work_bits: batch_pow_bits,
+        ..fri_params
+    };
+    let config = MyConfig::new(
+        MyPcs::new(Dft::default(), val_mmcs, fri_params),
+        Challenger::new(default_babybear_poseidon2_16()),
+    );
+    // Same default permutation the config's challenger uses, for the recursive verifier circuit.
     let perm = default_babybear_poseidon2_16();
 
     // Enable MMCS verification
@@ -63,7 +71,9 @@ fn build_fibonacci_test_setup() -> FibonacciTestSetup {
         scalars.query_pow_bits,
         scalars.num_queries,
         Poseidon2Config::BABY_BEAR_D4_W16,
-    );
+    )
+    .try_with_batch_pow_bits(batch_pow_bits)
+    .unwrap();
     let pis = vec![F::ZERO, F::ONE, F::from_u64(x)];
     let air = FibonacciAir {};
     let proof = prove(&config, &air, trace, &pis).unwrap();
@@ -88,7 +98,8 @@ fn restore_query_paths(
     proof: &p3_uni_stark::Proof<MyConfig>,
     pis: &[F],
 ) -> Vec<FriQueryPaths<F, DIGEST_ELEMS>> {
-    let (val_mmcs, fri_params) = test_fri_instance();
+    let (val_mmcs, mut fri_params) = test_fri_instance();
+    fri_params.batch_proof_of_work_bits = setup.fri_verifier_params.batch_pow_bits();
     let OpeningTranscript {
         mut challenger,
         commitments_with_opening_points,
@@ -193,7 +204,7 @@ fn run_recursive_verifier(
 #[test]
 fn test_fibonacci_verifier() -> Result<(), VerificationError> {
     init_logger();
-    let setup = build_fibonacci_test_setup();
+    let setup = build_fibonacci_test_setup(0);
     assert!(verify(&setup.config, &setup.air, &setup.proof, &setup.pis).is_ok());
     let query_paths = restore_query_paths(&setup, &setup.proof, &setup.pis);
     run_recursive_verifier(&setup, &setup.proof, &setup.pis, &query_paths)
@@ -204,7 +215,7 @@ fn test_fibonacci_verifier() -> Result<(), VerificationError> {
 #[test]
 #[should_panic(expected = "WitnessConflict")]
 fn test_tampered_trace_commitment() {
-    let mut setup = build_fibonacci_test_setup();
+    let mut setup = build_fibonacci_test_setup(0);
     // Genuine Merkle witnesses for the honest proof, so only the statement is tampered with.
     let query_paths = restore_query_paths(&setup, &setup.proof, &setup.pis);
 
@@ -221,11 +232,33 @@ fn test_tampered_trace_commitment() {
 #[test]
 #[should_panic(expected = "WitnessConflict")]
 fn test_tampered_fri_final_poly() {
-    let mut setup = build_fibonacci_test_setup();
+    let mut setup = build_fibonacci_test_setup(0);
     // Genuine Merkle witnesses for the honest proof, so only the statement is tampered with.
     let query_paths = restore_query_paths(&setup, &setup.proof, &setup.pis);
 
     setup.proof.opening_proof.final_poly[0] += Challenge::ONE;
+
+    run_recursive_verifier(&setup, &setup.proof, &setup.pis, &query_paths).unwrap();
+}
+
+#[test]
+fn test_fibonacci_verifier_with_batch_pow() -> Result<(), VerificationError> {
+    let setup = build_fibonacci_test_setup(3);
+    assert!(verify(&setup.config, &setup.air, &setup.proof, &setup.pis).is_ok());
+    let query_paths = restore_query_paths(&setup, &setup.proof, &setup.pis);
+    run_recursive_verifier(&setup, &setup.proof, &setup.pis, &query_paths)
+}
+
+/// A batch proof-of-work witness other than the one the prover ground is refused by the
+/// verifier circuit as a `WitnessConflict`.
+#[test]
+#[should_panic(expected = "WitnessConflict")]
+fn test_tampered_batch_pow_witness() {
+    let mut setup = build_fibonacci_test_setup(3);
+    // Genuine Merkle witnesses for the honest proof, so only the statement is tampered with.
+    let query_paths = restore_query_paths(&setup, &setup.proof, &setup.pis);
+
+    setup.proof.opening_proof.batch_pow_witness += F::ONE;
 
     run_recursive_verifier(&setup, &setup.proof, &setup.pis, &query_paths).unwrap();
 }
@@ -235,7 +268,7 @@ fn test_tampered_fri_final_poly() {
 #[test]
 #[should_panic(expected = "WitnessConflict")]
 fn test_wrong_public_inputs() {
-    let setup = build_fibonacci_test_setup();
+    let setup = build_fibonacci_test_setup(0);
     // Genuine Merkle witnesses for the honest proof, so only the claimed inputs are wrong.
     let query_paths = restore_query_paths(&setup, &setup.proof, &setup.pis);
 
@@ -251,7 +284,7 @@ fn test_wrong_public_inputs() {
 #[test]
 #[should_panic(expected = "WitnessConflict")]
 fn test_tampered_ood_evaluation() {
-    let mut setup = build_fibonacci_test_setup();
+    let mut setup = build_fibonacci_test_setup(0);
     // Genuine Merkle witnesses for the honest proof, so only the statement is tampered with.
     let query_paths = restore_query_paths(&setup, &setup.proof, &setup.pis);
 
@@ -266,7 +299,7 @@ fn test_tampered_ood_evaluation() {
 /// data.
 #[test]
 fn test_truncated_fri_proof() {
-    let setup = build_fibonacci_test_setup();
+    let setup = build_fibonacci_test_setup(0);
 
     // Build the circuit against the valid proof so op_ids match the full shape.
     let mut circuit_builder = CircuitBuilder::new();

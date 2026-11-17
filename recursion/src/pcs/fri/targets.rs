@@ -291,6 +291,7 @@ pub struct FriProofTargets<
     InputProof: Recursive<EF>,
     Witness: Recursive<EF>,
 > {
+    pub batch_pow_witness: Witness,
     pub commit_phase_commits: Vec<RecMmcs::Commitment>,
     pub commit_pow_witnesses: Vec<Witness>,
     pub query_proofs: Vec<QueryProofTargets<F, EF, InputProof, RecMmcs>>,
@@ -336,6 +337,8 @@ where
     type Input = FriProof<EF, RecMmcs::Input, Witness::Input, InputProof::MultiOpenings>;
 
     fn new(circuit: &mut CircuitBuilder<EF>, input: &Self::Input) -> Self {
+        let batch_pow_witness = Witness::new(circuit, &input.batch_pow_witness);
+
         let commit_phase_commits = input
             .commit_phase_commits
             .iter()
@@ -369,6 +372,7 @@ where
             .collect();
 
         Self {
+            batch_pow_witness,
             commit_phase_commits,
             commit_pow_witnesses,
             query_proofs,
@@ -380,7 +384,7 @@ where
 
     fn get_values(input: &Self::Input) -> Vec<EF> {
         let FriProof {
-            batch_pow_witness: _,
+            batch_pow_witness,
             commit_phase_commits,
             commit_pow_witnesses,
             input_openings,
@@ -389,9 +393,13 @@ where
             query_pow_witness,
         } = input;
 
-        commit_phase_commits
-            .iter()
-            .flat_map(|c| RecMmcs::Commitment::get_values(c))
+        Witness::get_values(batch_pow_witness)
+            .into_iter()
+            .chain(
+                commit_phase_commits
+                    .iter()
+                    .flat_map(|c| RecMmcs::Commitment::get_values(c)),
+            )
             .chain(
                 commit_pow_witnesses
                     .iter()
@@ -445,7 +453,7 @@ where
 
     fn input_shape(input: &Self::Input) -> Result<Self::Shape, VerificationError> {
         let FriProof {
-            batch_pow_witness: _,
+            batch_pow_witness,
             commit_phase_commits,
             commit_pow_witnesses,
             input_openings,
@@ -482,6 +490,7 @@ where
         }
 
         Ok(FriShape {
+            batch_pow_witness: Witness::input_shape(batch_pow_witness)?,
             commit_phase_commits: commit_phase_commits
                 .iter()
                 .map(RecMmcs::Commitment::input_shape)
@@ -2093,8 +2102,12 @@ where
         // For batch-STARK, the caller must observe in per-instance order to match native.
         // For single-STARK, the caller can use opened_values.observe() directly.
 
-        // Sample FRI alpha (for batch opening reduction) - extension field. The batch phase
-        // grinds nothing: the recursive verifier only accepts a zero batch difficulty.
+        challenger.check_pow_witness(
+            circuit,
+            params.batch_pow_bits(),
+            fri_proof.batch_pow_witness.witness,
+        )?;
+        // Sample FRI alpha (for batch opening reduction) - extension field.
         let fri_alpha = challenger.sample_ext(circuit);
 
         // The low-degree test opens its own transcript with a seed bound to its shape.
@@ -2604,6 +2617,11 @@ where
     {
         let fri_proof = &proof_targets.inner_proof;
 
+        challenger.check_pow_witness(
+            circuit,
+            params.batch_pow_bits(),
+            fri_proof.batch_pow_witness.witness,
+        )?;
         let fri_alpha = challenger.sample_ext(circuit);
         challenger.observe_seed(
             circuit,
@@ -3449,7 +3467,7 @@ mod prepared_shape_tests {
         )
         .expect("ordinary counted collector accepts the fixture");
         assert_eq!(counts.private_values(), 136);
-        assert_eq!(counts.public_values(), 29);
+        assert_eq!(counts.public_values(), 30);
         assert!(<OpeningTargets as CheckedRecursive<Challenge>>::validate_input(&baseline).is_ok());
         let old = <OpeningTargets as CheckedFriOpening<
             Challenge,
@@ -3463,7 +3481,7 @@ mod prepared_shape_tests {
         )
         .expect("baseline fixture is fresh-valid");
         assert_eq!(OpeningTargets::get_private_values(&baseline).len(), 136);
-        assert_eq!(OpeningTargets::get_values(&baseline).len(), 29);
+        assert_eq!(OpeningTargets::get_values(&baseline).len(), 30);
 
         let assert_rejected = |proof: &Opening,
                                candidate_layout: FriOpeningLayout<'_>,
@@ -3819,6 +3837,10 @@ mod prepared_shape_tests {
         phase_cap_digest.commit_phase_commits[0] = MerkleCap::new(phase_cap_roots);
         assert_compatible("phase cap digest", &phase_cap_digest, &baseline_cap_refs);
 
+        let mut batch_scalar = baseline.clone();
+        batch_scalar.batch_pow_witness = F::ONE;
+        assert_compatible("batch scalar", &batch_scalar, &baseline_cap_refs);
+
         let mut commit_scalar = baseline.clone();
         commit_scalar.commit_pow_witnesses[2] = F::ONE;
         assert_compatible("commit scalar", &commit_scalar, &baseline_cap_refs);
@@ -3887,7 +3909,7 @@ mod prepared_shape_tests {
         )
         .expect("hiding counted collector accepts the fixture");
         assert_eq!(counts.private_values(), 310);
-        assert_eq!(counts.public_values(), 29);
+        assert_eq!(counts.public_values(), 30);
         assert!(
             <HidingOpeningTargets as CheckedRecursive<Challenge>>::validate_input(&baseline)
                 .is_ok()
@@ -3907,7 +3929,7 @@ mod prepared_shape_tests {
             HidingOpeningTargets::get_private_values(&baseline).len(),
             310
         );
-        assert_eq!(HidingOpeningTargets::get_values(&baseline).len(), 29);
+        assert_eq!(HidingOpeningTargets::get_values(&baseline).len(), 30);
 
         let assert_tail_rejected = |candidate: &HidingOpening| {
             assert!(
@@ -4359,6 +4381,10 @@ mod prepared_shape_tests {
         let mut phase_sibling_only = baseline.clone();
         phase_sibling_only.1.commit_phase_openings[2].sibling_values[3][0] = Challenge::ONE;
         assert_hiding_compatible("phase sibling", &phase_sibling_only, &baseline_cap_refs);
+
+        let mut batch_scalar_only = baseline.clone();
+        batch_scalar_only.1.batch_pow_witness = F::ONE;
+        assert_hiding_compatible("batch scalar", &batch_scalar_only, &baseline_cap_refs);
 
         let mut commit_scalar_only = baseline.clone();
         commit_scalar_only.1.commit_pow_witnesses[2] = F::ONE;
@@ -5147,7 +5173,7 @@ mod prepared_shape_tests {
             max_matrix_width: 2,
             max_final_poly_evaluations: 1,
             max_cap_roots: 1,
-            max_total_scalar_elements: 17,
+            max_total_scalar_elements: 18,
             max_compressed_frontier_hashes: 5,
             ..VerifierLimits::default()
         };
@@ -5162,7 +5188,7 @@ mod prepared_shape_tests {
         assert_eq!(usage.cap_roots, 1);
         assert_eq!(usage.final_poly_evaluations, 1);
         assert_eq!(usage.compressed_frontier_hashes, 5);
-        assert_eq!(usage.scalar_elements, 17);
+        assert_eq!(usage.scalar_elements, 18);
 
         for (limits, component) in [
             (
@@ -5216,7 +5242,7 @@ mod prepared_shape_tests {
             ),
             (
                 VerifierLimits {
-                    max_total_scalar_elements: 16,
+                    max_total_scalar_elements: 17,
                     ..exact
                 },
                 "scalar elements",
@@ -5307,7 +5333,7 @@ mod prepared_shape_tests {
         proof.1.commit_phase_openings[0].opening_proof.1 = frontier(3);
         let exact = VerifierLimits {
             max_matrix_width: 4,
-            max_total_scalar_elements: 26,
+            max_total_scalar_elements: 27,
             max_compressed_frontier_hashes: 5,
             ..VerifierLimits::default()
         };
@@ -5316,13 +5342,13 @@ mod prepared_shape_tests {
             <RecHidingMmcs as RecursiveMmcs<F, Challenge>>::Commitment,
         >>::check_fri_resources(&proof, &exact)
         .expect("hiding proof is accepted at its literal resource boundaries");
-        assert_eq!(usage.scalar_elements, 26);
+        assert_eq!(usage.scalar_elements, 27);
         assert_eq!(usage.compressed_frontier_hashes, 5);
 
         for (limits, component) in [
             (
                 VerifierLimits {
-                    max_total_scalar_elements: 25,
+                    max_total_scalar_elements: 26,
                     ..exact
                 },
                 "scalar elements",

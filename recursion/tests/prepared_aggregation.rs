@@ -35,8 +35,9 @@ use p3_recursion::{
     PreparedAggregationCross, PreparedInput, PreparedPcsRecursionBackend, PreparedSource,
     ProveNextLayerParams, RecursionInput, RecursiveAir, RecursivePcs, TrustedPreparedAggregation,
     TrustedPreparedInput, TrustedPreparedSource, VerificationError, VerifierCircuitResult,
-    VerifierLimits, build_aggregation_layer_circuit, build_next_layer_circuit,
-    merge_hiding_random_openings, observe_opened_values, prove_aggregation_layer,
+    VerifierLimits, build_aggregation_layer_circuit, build_and_prove_next_layer,
+    build_next_layer_circuit, merge_hiding_random_openings, observe_opened_values,
+    prove_aggregation_layer,
 };
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_test_utils::koala_bear_params::{
@@ -653,14 +654,17 @@ mod hiding_fri {
         }
     }
 
-    pub(super) fn config(seed: u64) -> Config {
+    pub(super) fn config(seed: u64, batch_pow_bits: usize) -> Config {
         let permutation = default_koalabear_poseidon2_16();
         let val_mmcs = MyMmcs::new(
             MyHash::new(permutation.clone()),
             MyCompress::new(permutation.clone()),
             0,
         );
-        let fri_params = FriParameters::new_testing(ChallengeMmcs::new(val_mmcs.clone()), 0);
+        let fri_params = FriParameters {
+            batch_proof_of_work_bits: batch_pow_bits,
+            ..FriParameters::new_testing(ChallengeMmcs::new(val_mmcs.clone()), 0)
+        };
         let native_fri_params = NativeFriParams::try_from_native::<F, _>(&fri_params).unwrap();
         let verifier_params = FriVerifierParams::with_mmcs(
             native_fri_params.log_blowup(),
@@ -670,7 +674,9 @@ mod hiding_fri {
             native_fri_params.query_pow_bits(),
             native_fri_params.num_queries(),
             Poseidon2Config::KOALA_BEAR_D4_W16,
-        );
+        )
+        .try_with_batch_pow_bits(batch_pow_bits)
+        .unwrap();
         let pcs = HidingPcs::new(
             Dft::default(),
             val_mmcs.clone(),
@@ -1801,7 +1807,7 @@ fn cross_config_profile_aggregation_verifies_arity2_inputs_and_emits_arity4_outp
 
 #[test]
 fn hiding_fri_aggregation_reuses_preparation_for_varied_honest_pairs() {
-    let config = hiding_fri::config(7);
+    let config = hiding_fri::config(7, 0);
     let backend = FriRecursionBackend::<16, 8, _>::new(Poseidon2Config::KOALA_BEAR_D4_W16)
         .for_extension_degree::<4>();
     let params = ProveNextLayerParams::default();
@@ -1859,8 +1865,31 @@ fn hiding_fri_aggregation_reuses_preparation_for_varied_honest_pairs() {
 }
 
 #[test]
+fn hiding_fri_layer_verifies_a_proof_with_batch_pow() {
+    let config = hiding_fri::config(11, 3);
+    let backend = FriRecursionBackend::<16, 8, _>::new(Poseidon2Config::KOALA_BEAR_D4_W16)
+        .for_extension_degree::<4>();
+    let params = ProveNextLayerParams::default();
+    let proof = hiding_fri::batch_proof(&config, 0, 1);
+    let table_public_inputs = vec![vec![]; proof.proof.opened_values.instances.len()];
+
+    let output = build_and_prove_next_layer::<hiding_fri::Config, BatchOnly, _, 4>(
+        &RecursionInput::BatchStark {
+            proof: &proof,
+            common_data: &proof.stark_common,
+            table_public_inputs,
+        },
+        &config,
+        &backend,
+        &params,
+    )
+    .expect("the hiding verifier accepts a proof with a batch grind");
+    hiding_fri::verify(config, &params, &output);
+}
+
+#[test]
 fn hiding_batch_random_width_is_checked_by_the_preallocation_context_pass() {
-    let config = hiding_fri::config(9);
+    let config = hiding_fri::config(9, 0);
     let backend = FriRecursionBackend::<16, 8, _>::new(Poseidon2Config::KOALA_BEAR_D4_W16)
         .for_extension_degree::<4>();
     let mut proof = hiding_fri::batch_proof(&config, 0, 1);
