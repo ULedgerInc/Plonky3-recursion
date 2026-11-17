@@ -11,6 +11,7 @@ use std::vec::Vec;
 use itertools::Itertools;
 use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
 use p3_batch_stark::ProverData;
+use p3_challenger::{CanObserve, CanSample, CanSampleBits, FieldChallenger, GrindingChallenger};
 use p3_circuit::ops::{generate_poseidon2_trace, generate_recompose_trace};
 use p3_circuit::{Circuit, CircuitBuilder, CircuitRunner, NonPrimitiveOpId, StatementExport};
 use p3_circuit_prover::batch_stark_prover::{
@@ -65,6 +66,64 @@ pub(crate) type InnerFriGeneric<MyConfig, MyHash, MyCompress, const DIGEST_ELEMS
         >,
         Witness<Val<MyConfig>>,
     >;
+
+/// A prover challenger that grinds the batch proof-of-work witness one bit short.
+///
+/// At `batch_pow_bits` it takes the first witness, counting up from zero, that passes the
+/// prover's own check at one bit fewer and fails it at the full difficulty. Every other grind and
+/// every observation and sample are the wrapped challenger's own, so the rest of the proof stays
+/// consistent with that witness.
+#[derive(Clone)]
+pub(crate) struct ShortBatchGrind<C> {
+    pub(crate) inner: C,
+    pub(crate) batch_pow_bits: usize,
+}
+
+impl<C: CanObserve<T>, T> CanObserve<T> for ShortBatchGrind<C> {
+    fn observe(&mut self, value: T) {
+        self.inner.observe(value);
+    }
+
+    fn observe_slice(&mut self, values: &[T])
+    where
+        T: Clone,
+    {
+        self.inner.observe_slice(values);
+    }
+}
+
+impl<C: CanSample<T>, T> CanSample<T> for ShortBatchGrind<C> {
+    fn sample(&mut self) -> T {
+        self.inner.sample()
+    }
+}
+
+impl<C: CanSampleBits<usize>> CanSampleBits<usize> for ShortBatchGrind<C> {
+    fn sample_bits(&mut self, bits: usize) -> usize {
+        self.inner.sample_bits(bits)
+    }
+}
+
+impl<F: Field, C: FieldChallenger<F>> FieldChallenger<F> for ShortBatchGrind<C> {}
+
+impl<C: GrindingChallenger + Clone> GrindingChallenger for ShortBatchGrind<C> {
+    type Witness = C::Witness;
+
+    fn grind(&mut self, bits: usize) -> Self::Witness {
+        if bits != self.batch_pow_bits {
+            return self.inner.grind(bits);
+        }
+        let witness = (0..)
+            .map(C::Witness::from_u64)
+            .find(|&witness| {
+                self.inner.clone().check_witness(bits - 1, witness)
+                    && !self.inner.clone().check_witness(bits, witness)
+            })
+            .expect("a witness one bit short exists");
+        assert!(!self.inner.check_witness(bits, witness));
+        witness
+    }
+}
 
 /// A test AIR that enforces multiplication constraints: `a^(degree-1) * b = c`
 ///
