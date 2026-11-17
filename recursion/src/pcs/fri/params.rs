@@ -551,6 +551,23 @@ mod tests {
     }
 
     #[test]
+    fn batch_pow_bits_are_range_checked() {
+        let mut params = native(1, 0, 1, 2, 0, 0);
+        params.batch_proof_of_work_bits = 31;
+        assert_eq!(
+            NativeFriParams::try_from_native::<BabyBear, _>(&params),
+            Err(FriInputError::PowBitsOutOfRange { name: "batch" })
+        );
+        assert_eq!(
+            FriVerifierParams::with_mmcs(1, 0, 1, 0, 0, 2, p2())
+                .try_with_batch_pow_bits(usize::BITS as usize),
+            Err(FriVerifierParamsError::LogNotRepresentable {
+                name: "batch_pow_bits"
+            })
+        );
+    }
+
+    #[test]
     fn native_snapshot_rejects_height_overflow_and_field_height() {
         assert_eq!(
             NativeFriParams::try_from_native::<BabyBear, _>(&native(usize::MAX, 1, 1, 2, 0, 0)),

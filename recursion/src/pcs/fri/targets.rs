@@ -215,11 +215,9 @@ fn num_queries_from_counts(from_rounds: Option<usize>, from_batches: Option<usiz
 }
 
 /// The domain-separator seed of the native FRI PCS transcript for a set of claims.
-///
-/// The recursive verifier only accepts a zero batch-phase difficulty (see
-/// [`NativeFriParams`]), so the shape binds zero batch PoW bits.
 pub(crate) fn fri_pcs_transcript_seed<F, EF>(
     claimed_evaluation_counts: Vec<Vec<Vec<usize>>>,
+    batch_pow_bits: usize,
 ) -> Vec<F>
 where
     F: PrimeField64,
@@ -228,7 +226,7 @@ where
     domain_separator_seed(
         &p3_fri::PcsShape {
             claimed_evaluation_counts,
-            batch_pow_bits: 0,
+            batch_pow_bits,
         }
         .domain_separator::<F, EF>(),
     )
@@ -2053,14 +2051,17 @@ where
     type VerifierParams = FriVerifierParams;
 
     fn claims_transcript_seed(
-        _params: &Self::VerifierParams,
+        params: &Self::VerifierParams,
         claimed_evaluation_counts: Vec<Vec<Vec<usize>>>,
     ) -> Vec<Val<SC>>
     where
         Val<SC>: PrimeField64,
         SC::Challenge: ExtensionField<Val<SC>>,
     {
-        fri_pcs_transcript_seed::<Val<SC>, SC::Challenge>(claimed_evaluation_counts)
+        fri_pcs_transcript_seed::<Val<SC>, SC::Challenge>(
+            claimed_evaluation_counts,
+            params.batch_pow_bits(),
+        )
     }
     type RecursiveProof = RecursiveFriProof<
         SC,
@@ -2568,14 +2569,17 @@ where
     type VerifierParams = FriVerifierParams;
 
     fn claims_transcript_seed(
-        _params: &Self::VerifierParams,
+        params: &Self::VerifierParams,
         claimed_evaluation_counts: Vec<Vec<Vec<usize>>>,
     ) -> Vec<Val<SC>>
     where
         Val<SC>: PrimeField64,
         SC::Challenge: ExtensionField<Val<SC>>,
     {
-        fri_pcs_transcript_seed::<Val<SC>, SC::Challenge>(claimed_evaluation_counts)
+        fri_pcs_transcript_seed::<Val<SC>, SC::Challenge>(
+            claimed_evaluation_counts,
+            params.batch_pow_bits(),
+        )
     }
     type RecursiveProof = RecursiveHidingFriProof<
         SC,
@@ -2784,7 +2788,9 @@ where
 mod prepared_shape_tests {
     use core::marker::PhantomData;
 
+    use p3_baby_bear::BabyBear;
     use p3_field::PrimeCharacteristicRing;
+    use p3_field::extension::BinomialExtensionField;
     use p3_fri::{BatchMultiOpening, CommitPhaseMultiStep, FriProof};
     use p3_merkle_tree::{MerkleTreeHidingMmcs, PrunedMerklePaths};
     use p3_symmetric::MerkleCap;
@@ -5736,5 +5742,27 @@ mod prepared_shape_tests {
         let left_shape: FriShape<_, _, _, _> = OpeningTargets::input_shape(&left).unwrap();
         let right_shape = OpeningTargets::input_shape(&right).unwrap();
         assert!(left_shape == right_shape);
+    }
+
+    #[test]
+    fn pcs_seed_binds_the_batch_pow_bits() {
+        let counts = alloc::vec![alloc::vec![alloc::vec![3usize, 1]]];
+        let zero = fri_pcs_transcript_seed::<BabyBear, BinomialExtensionField<BabyBear, 4>>(
+            counts.clone(),
+            0,
+        );
+        let sixteen = fri_pcs_transcript_seed::<BabyBear, BinomialExtensionField<BabyBear, 4>>(
+            counts.clone(),
+            16,
+        );
+        assert_ne!(zero, sixteen);
+        let native = domain_separator_seed(
+            &p3_fri::PcsShape {
+                claimed_evaluation_counts: counts,
+                batch_pow_bits: 16,
+            }
+            .domain_separator::<BabyBear, BinomialExtensionField<BabyBear, 4>>(),
+        );
+        assert_eq!(sixteen, native);
     }
 }
